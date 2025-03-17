@@ -69,6 +69,16 @@ impl<T: ToSocketAddrs + Send> TcpListener<T> {
         {
             RustlsListener::new(config_stream, self)
         }
+
+        /// Creates a new `RustlsListener` from current `TcpListener`.
+        #[inline]
+        pub fn rustls_async<S, E>(self, config: S) -> super::RustlsAsyncListener<S,Self,E>
+        where
+            S: super::rustls_async::ResolvesServerConfig<E> + Send + 'static,
+            E: std::error::Error + Send
+        {
+            super::RustlsAsyncListener::new(config, self)
+        }
     }
 
     cfg_feature! {

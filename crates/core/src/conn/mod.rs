@@ -31,6 +31,9 @@ cfg_feature! {
     #![feature = "rustls"]
     pub mod rustls;
     pub use rustls::RustlsListener;
+    
+    pub mod rustls_async;
+    pub use rustls_async::RustlsListener as RustlsAsyncListener;
 }
 cfg_feature! {
     #![feature = "openssl"]
