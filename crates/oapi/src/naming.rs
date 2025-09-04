@@ -56,9 +56,7 @@ pub fn set_name_type_info(
     type_id: TypeId,
     type_name: &'static str,
 ) -> Option<(TypeId, &'static str)> {
-    NAME_TYPES
-        .write()
-        .insert(name.clone(), (type_id, type_name))
+    NAME_TYPES.write().insert(name, (type_id, type_name))
 }
 
 /// Assign name to type and returns the name.
@@ -108,17 +106,20 @@ pub struct FlexNamer {
 }
 impl FlexNamer {
     /// Create a new FlexNamer.
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
 
     /// Set the short mode.
+    #[must_use]
     pub fn short_mode(mut self, short_mode: bool) -> Self {
         self.short_mode = short_mode;
         self
     }
 
     /// Set the delimiter for generic types.
+    #[must_use]
     pub fn generic_delimiter(mut self, open: impl Into<String>, close: impl Into<String>) -> Self {
         self.generic_delimiter = Some((open.into(), close.into()));
         self
@@ -137,12 +138,12 @@ impl Namer for FlexNamer {
                 if let Some((open, close)) = &self.generic_delimiter {
                     base = base.replace('<', open).replace('>', close);
                 }
-                let mut name = base.to_string();
+                let mut name = base.clone();
                 let mut count = 1;
                 while let Some(exist_id) = type_info_by_name(&name).map(|t| t.0) {
                     if exist_id != type_id {
                         count += 1;
-                        name = format!("{}{}", base, count);
+                        name = format!("{base}{count}");
                     } else {
                         break;
                     }
@@ -157,20 +158,20 @@ impl Namer for FlexNamer {
                     format! {"{}{}", force_name, type_generic_part(type_name).replace("::", ".")}
                 };
                 if let Some((open, close)) = &self.generic_delimiter {
-                    base = base.replace('<', open).replace('>', close).to_string();
+                    base = base.replace('<', open).replace('>', close);
                 }
-                let mut name = base.to_string();
+                let mut name = base.clone();
                 let mut count = 1;
                 while let Some((exist_id, exist_name)) = type_info_by_name(&name) {
                     if exist_id != type_id {
                         count += 1;
                         tracing::error!("Duplicate name for types: {}, {}", exist_name, type_name);
-                        name = format!("{}{}", base, count);
+                        name = format!("{base}{count}");
                     } else {
                         break;
                     }
                 }
-                name.to_string()
+                name
             }
         };
         set_name_type_info(name.clone(), type_id, type_name);

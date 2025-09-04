@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+use std::io::{Error as IoError, Result as IoResult};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +27,7 @@ pub struct AcmeConfig {
 impl AcmeConfig {
     /// Create an ACME configuration builder.
     #[inline]
+    #[must_use]
     pub fn builder() -> AcmeConfigBuilder {
         AcmeConfigBuilder::new()
     }
@@ -45,6 +46,7 @@ impl Debug for AcmeConfig {
 }
 
 /// ACME configuration builder
+#[derive(Debug)]
 pub struct AcmeConfigBuilder {
     pub(crate) directory_name: String,
     pub(crate) directory_url: String,
@@ -58,10 +60,11 @@ pub struct AcmeConfigBuilder {
 
 impl AcmeConfigBuilder {
     #[inline]
+    #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            directory_name: "lets_encrypt".to_string(),
-            directory_url: LETS_ENCRYPT_PRODUCTION.to_string(),
+            directory_name: "lets_encrypt".to_owned(),
+            directory_url: LETS_ENCRYPT_PRODUCTION.to_owned(),
             domains: Vec::new(),
             contacts: Default::default(),
             challenge_type: ChallengeType::TlsAlpn01,
@@ -75,6 +78,7 @@ impl AcmeConfigBuilder {
     ///
     /// Defaults to lets encrypt production.
     #[inline]
+    #[must_use]
     pub fn directory(self, name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             directory_name: name.into(),
@@ -85,12 +89,14 @@ impl AcmeConfigBuilder {
 
     /// Sets domains.
     #[inline]
+    #[must_use]
     pub fn domains(mut self, domains: impl Into<Vec<String>>) -> Self {
         self.domains = domains.into();
         self
     }
     /// Add a domain.
     #[inline]
+    #[must_use]
     pub fn add_domain(mut self, domain: impl Into<String>) -> Self {
         self.domains.push(domain.into());
         self
@@ -98,12 +104,14 @@ impl AcmeConfigBuilder {
 
     /// Sets contact email for the ACME account.
     #[inline]
+    #[must_use]
     pub fn contacts(mut self, contacts: impl Into<Vec<String>>) -> Self {
         self.contacts = contacts.into();
         self
     }
     /// Add a contact email for the ACME account.
     #[inline]
+    #[must_use]
     pub fn add_contact(mut self, contact: impl Into<String>) -> Self {
         self.contacts.push(contact.into());
         self
@@ -111,6 +119,7 @@ impl AcmeConfigBuilder {
 
     /// Sets the challenge type Http01
     #[inline]
+    #[must_use]
     pub fn http01_challenge(self) -> Self {
         Self {
             challenge_type: ChallengeType::Http01,
@@ -120,6 +129,7 @@ impl AcmeConfigBuilder {
     }
     /// Sets the challenge type TlsAlpn01
     #[inline]
+    #[must_use]
     pub fn tls_alpn01_challenge(self) -> Self {
         Self {
             challenge_type: ChallengeType::TlsAlpn01,
@@ -134,6 +144,7 @@ impl AcmeConfigBuilder {
     /// the obtained certificate will be stored in memory and will need to be
     /// obtained again when the server is restarted next time.
     #[inline]
+    #[must_use]
     pub fn cache_path(self, path: impl Into<PathBuf>) -> Self {
         Self {
             cache_path: Some(path.into()),
@@ -143,6 +154,7 @@ impl AcmeConfigBuilder {
 
     /// Sets the duration update certificate before it expired.
     #[inline]
+    #[must_use]
     pub fn before_expired(self, before_expired: Duration) -> Self {
         Self { before_expired, ..self }
     }
@@ -151,9 +163,9 @@ impl AcmeConfigBuilder {
     pub fn build(self) -> IoResult<AcmeConfig> {
         self.directory_url
             .parse::<Uri>()
-            .map_err(|e| IoError::new(ErrorKind::Other, format!("invalid directory url: {}", e)))?;
+            .map_err(|e| IoError::other(format!("invalid directory url: {e}")))?;
         if self.domains.is_empty() {
-            return Err(IoError::new(ErrorKind::Other, "at least one domain name is expected"));
+            return Err(IoError::other("at least one domain name is expected"));
         }
         let Self {
             directory_name,

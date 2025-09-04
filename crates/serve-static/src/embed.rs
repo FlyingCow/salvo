@@ -1,11 +1,15 @@
 use std::borrow::Cow;
+use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 
 use rust_embed::{EmbeddedFile, Metadata, RustEmbed};
-use salvo_core::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH};
-use salvo_core::http::{HeaderValue, Mime, Request, Response, StatusCode};
-use salvo_core::{async_trait, Depot, FlowCtrl, IntoVecString};
-use salvo_core::handler::{ Handler};
+use salvo_core::handler::Handler;
+use salvo_core::http::header::{
+    ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE,
+};
+use salvo_core::http::headers::{ContentLength, ContentRange, HeaderMapExt};
+use salvo_core::http::{HeaderValue, HttpRange, Mime, Request, Response, StatusCode};
+use salvo_core::{Depot, FlowCtrl, IntoVecString, async_trait};
 
 use super::{decode_url_path_safely, format_url_path_safely, join_path, redirect_to_dir_url};
 
@@ -22,9 +26,18 @@ pub struct StaticEmbed<T> {
     /// Fallback file name used when the requested file isn't found
     pub fallback: Option<String>,
 }
+impl<T: Debug> Debug for StaticEmbed<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StaticEmbed")
+            .field("defaults", &self.defaults)
+            .field("fallback", &self.fallback)
+            .finish()
+    }
+}
 
 /// Create a new `StaticEmbed` handler for the given embedded asset type.
 #[inline]
+#[must_use]
 pub fn static_embed<T: RustEmbed>() -> StaticEmbed<T> {
     StaticEmbed {
         _assets: PhantomData,
@@ -35,8 +48,13 @@ pub fn static_embed<T: RustEmbed>() -> StaticEmbed<T> {
 
 /// Render an [`EmbeddedFile`] to the [`Response`].
 #[inline]
-pub fn render_embedded_file(file: EmbeddedFile, req: &Request, res: &mut Response, mime: Option<Mime>) {
-    let EmbeddedFile { data, metadata, .. } = file;
+pub fn render_embedded_file(
+    file: EmbeddedFile,
+    req: &Request,
+    res: &mut Response,
+    mime: Option<Mime>,
+) {
+    let EmbeddedFile { data, metadata } = file;
     render_embedded_data(data, &metadata, req, res, mime);
 }
 
@@ -45,18 +63,21 @@ fn render_embedded_data(
     metadata: &Metadata,
     req: &Request,
     res: &mut Response,
-    mime: Option<Mime>,
+    mime_override: Option<Mime>,
 ) {
-    let mime = mime.unwrap_or_else(|| mime_infer::from_path(req.uri().path()).first_or_octet_stream());
+    // Determine Content-Type once
+    let effective_mime = mime_override
+        .unwrap_or_else(|| mime_infer::from_path(req.uri().path()).first_or_octet_stream());
     res.headers_mut().insert(
         CONTENT_TYPE,
-        mime.as_ref()
+        effective_mime
+            .as_ref()
             .parse()
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
 
+    // ETag generation and If-None-Match check
     let hash = hex::encode(metadata.sha256_hash());
-    // if etag is matched, return 304
     if req
         .headers()
         .get(IF_NONE_MATCH)
@@ -67,19 +88,102 @@ fn render_embedded_data(
         return;
     }
 
-    // otherwise, return 200 with etag hash
-    if let Ok(hash) = hash.parse() {
-        res.headers_mut().insert(ETAG, hash);
+    // Set ETag for all successful responses (200 or 206)
+    if let Ok(etag_val) = hash.parse() {
+        res.headers_mut().insert(ETAG, etag_val);
     } else {
         tracing::error!("Failed to parse etag hash: {}", hash);
     }
 
-    match data {
-        Cow::Borrowed(data) => {
-            let _ = res.write_body(data);
+    // Indicate that byte ranges are accepted
+    res.headers_mut()
+        .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+
+    let total_data_len = data.len() as u64;
+    let mut is_partial_content = false;
+    let mut range_to_send: Option<(u64, u64)> = None; // (start_offset, length_of_part)
+
+    let req_headers = req.headers();
+    if let Some(range_header_val) = req_headers.get(RANGE) {
+        if let Ok(range_str) = range_header_val.to_str() {
+            match HttpRange::parse(range_str, total_data_len) {
+                Ok(ranges) if !ranges.is_empty() => {
+                    // Successfully parsed and satisfiable range(s). We only handle the first one.
+                    let first_range = &ranges[0]; // HttpRange ensures start + length <= total_data_len
+                    is_partial_content = true;
+                    range_to_send = Some((first_range.start, first_range.length));
+
+                    res.status_code(StatusCode::PARTIAL_CONTENT);
+                    match ContentRange::bytes(
+                        first_range.start..(first_range.start + first_range.length),
+                        total_data_len,
+                    ) {
+                        Ok(content_range_header) => {
+                            res.headers_mut().typed_insert(content_range_header);
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, "Failed to create Content-Range header");
+                            res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
+                            return;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // HttpRange::parse returns Err if the range is unsatisfiable or malformed.
+                    res.headers_mut()
+                        .typed_insert(ContentRange::unsatisfied_bytes(total_data_len));
+                    res.status_code(StatusCode::RANGE_NOT_SATISFIABLE);
+                    return;
+                }
+                Ok(_) => {
+                    // Parsed, but no valid ranges. Treat as full content.
+                    // is_partial_content remains false.
+                }
+            }
+        } else {
+            // Failed to convert Range header to string (e.g., invalid UTF-8)
+            res.status_code(StatusCode::BAD_REQUEST);
+            return;
         }
-        Cow::Owned(data) => {
-            let _ = res.write_body(data);
+    }
+
+    if is_partial_content {
+        if let Some((offset, length)) = range_to_send {
+            // Ensure the range is valid before slicing. HttpRange::parse should guarantee this.
+            let end_offset = offset
+                .checked_add(length)
+                .expect("Range calculation overflowed");
+            if end_offset <= total_data_len {
+                // Check to prevent panic on slice
+                let partial_data_vec = data[offset as usize..end_offset as usize].to_vec();
+                res.headers_mut().typed_insert(ContentLength(length));
+                let _ = res.write_body(partial_data_vec); // write_body can take Vec<u8>
+            } else {
+                // This should ideally be caught by HttpRange::parse or ContentRange::bytes
+                tracing::error!("Calculated range exceeds data bounds after HttpRange::parse");
+                res.headers_mut()
+                    .typed_insert(ContentRange::unsatisfied_bytes(total_data_len));
+                res.status_code(StatusCode::RANGE_NOT_SATISFIABLE);
+                // Clear content length if we are not sending a body for this error
+                res.headers_mut().remove(CONTENT_LENGTH);
+            }
+        } else {
+            // Should not happen if is_partial_content is true.
+            tracing::error!("is_partial_content is true but range_to_send is None");
+            res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    } else {
+        // Serve full content
+        res.status_code(StatusCode::OK); // Ensure OK status
+        res.headers_mut()
+            .typed_insert(ContentLength(total_data_len));
+        match data {
+            Cow::Borrowed(d) => {
+                let _ = res.write_body(d);
+            }
+            Cow::Owned(o) => {
+                let _ = res.write_body(o);
+            }
         }
     }
 }
@@ -90,6 +194,7 @@ where
 {
     /// Create a new `StaticEmbed`.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             _assets: PhantomData,
@@ -100,6 +205,7 @@ where
 
     /// Create a new `StaticEmbed` with defaults.
     #[inline]
+    #[must_use]
     pub fn defaults(mut self, defaults: impl IntoVecString) -> Self {
         self.defaults = defaults.into_vec_string();
         self
@@ -107,6 +213,7 @@ where
 
     /// Create a new `StaticEmbed` with fallback.
     #[inline]
+    #[must_use]
     pub fn fallback(mut self, fallback: impl Into<String>) -> Self {
         self.fallback = Some(fallback.into());
         self
@@ -117,7 +224,13 @@ impl<T> Handler for StaticEmbed<T>
 where
     T: RustEmbed + Send + Sync + 'static,
 {
-    async fn handle(&self, req: &mut Request, _depot: &mut Depot, res: &mut Response, _ctrl: &mut FlowCtrl) {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        _depot: &mut Depot,
+        res: &mut Response,
+        _ctrl: &mut FlowCtrl,
+    ) {
         let req_path = if let Some(rest) = req.params().tail() {
             rest
         } else {
@@ -164,11 +277,22 @@ where
 
 /// Handler for [`EmbeddedFile`].
 pub struct EmbeddedFileHandler(pub EmbeddedFile);
+impl Debug for EmbeddedFileHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EmbeddedFileHandler").finish()
+    }
+}
 
 #[async_trait]
 impl Handler for EmbeddedFileHandler {
     #[inline]
-    async fn handle(&self, req: &mut Request, _depot: &mut Depot, res: &mut Response, _ctrl: &mut FlowCtrl) {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        _depot: &mut Depot,
+        res: &mut Response,
+        _ctrl: &mut FlowCtrl,
+    ) {
         render_embedded_data(self.0.data.clone(), &self.0.metadata, req, res, None);
     }
 }

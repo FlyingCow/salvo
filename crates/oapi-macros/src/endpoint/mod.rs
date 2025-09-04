@@ -11,19 +11,19 @@ pub(crate) use attr::EndpointAttr;
 fn metadata(
     salvo: &Ident,
     oapi: &Ident,
-    attr: EndpointAttr,
+    attr: &EndpointAttr,
     name: &Ident,
     mut modifiers: Vec<TokenStream>,
 ) -> DiagResult<TokenStream> {
     let tfn = Ident::new(
-        &format!("__macro_gen_oapi_endpoint_type_id_{}", name),
+        &format!("__macro_gen_oapi_endpoint_type_id_{name}"),
         Span::call_site(),
     );
     let cfn = Ident::new(
-        &format!("__macro_gen_oapi_endpoint_creator_{}", name),
+        &format!("__macro_gen_oapi_endpoint_creator_{name}"),
         Span::call_site(),
     );
-    let opt = Operation::new(&attr);
+    let opt = Operation::new(attr);
     modifiers.append(opt.modifiers()?.as_mut());
     let status_codes = Array::from_iter(attr.status_codes.iter().map(|expr| match expr {
         Expr::Lit(lit) => {
@@ -121,7 +121,7 @@ pub(crate) fn generate(mut attr: EndpointAttr, input: Item) -> syn::Result<Token
             };
 
             let (hfn, modifiers) = handle_fn(&salvo, &oapi, sig)?;
-            let meta = metadata(&salvo, &oapi, attr, name, modifiers)?;
+            let meta = metadata(&salvo, &oapi, &attr, name, modifiers)?;
             Ok(quote! {
                 #sdef
                 #[#salvo::async_trait]
@@ -159,7 +159,7 @@ pub(crate) fn generate(mut attr: EndpointAttr, input: Item) -> syn::Result<Token
             let ty = &item_impl.self_ty;
             let (impl_generics, _, where_clause) = &item_impl.generics.split_for_impl();
             let name = Ident::new(&ty.to_token_stream().to_string(), Span::call_site());
-            let meta = metadata(&salvo, &oapi, attr, &name, modifiers)?;
+            let meta = metadata(&salvo, &oapi, &attr, &name, modifiers)?;
 
             Ok(quote! {
                 #item_impl
@@ -287,4 +287,45 @@ fn handle_fn(
         }
     };
     Ok((hfn, modifiers))
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+    use syn::{Ident, Signature, parse_str};
+
+    use super::handle_fn;
+
+    #[test]
+    fn test_handle_fn() {
+        let salvo = Ident::new("salvo", proc_macro2::Span::call_site());
+        let oapi = Ident::new("salvo_oapi", proc_macro2::Span::call_site());
+        let sig: Signature = parse_str("fn hello(name: String)").unwrap();
+        let (hfn, modifiers) = handle_fn(&salvo, &oapi, &sig).unwrap();
+        let expected_hfn = quote! {
+            async fn handle(&self, __macro_gen_req: &mut salvo::Request, __macro_gen_depot: &mut salvo::Depot, __macro_gen_res: &mut salvo::Response, __macro_gen_ctrl: &mut salvo::FlowCtrl) {
+                let name: String = match <String as salvo::Extractible>::extract_with_arg(__macro_gen_req, "name").await {
+                    Ok(data) => {
+                        data
+                    },
+                    Err(e) => {
+                        e.write(__macro_gen_req, __macro_gen_depot, __macro_gen_res).await;
+                        // If status code is not set or is not error, set it to 400.
+                        let status_code = __macro_gen_res.status_code.unwrap_or_default();
+                        if !status_code.is_client_error() && !status_code.is_server_error() {
+                            __macro_gen_res.status_code(salvo::http::StatusCode::BAD_REQUEST);
+                        }
+                        return;
+                    }
+                };
+                Self::hello(name)
+            }
+        };
+        assert_eq!(hfn.to_string(), expected_hfn.to_string());
+        assert_eq!(modifiers.len(), 1);
+        let expected_modifier = quote! {
+            <String as salvo_oapi::oapi::EndpointArgRegister>::register(components, operation, "name");
+        };
+        assert_eq!(modifiers[0].to_string(), expected_modifier.to_string());
+    }
 }

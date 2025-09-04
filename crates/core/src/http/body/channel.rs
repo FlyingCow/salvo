@@ -1,5 +1,5 @@
 use std::fmt::{self, Debug, Formatter};
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+use std::io::{Error as IoError, Result as IoResult};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -30,10 +30,11 @@ impl BodySender {
     pub(crate) fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
         self.data_tx
             .poll_ready(cx)
-            .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to poll ready: {}", e)))
+            .map_err(|e| IoError::other(format!("failed to poll ready: {e}")))
     }
 
     /// Returns whether this channel is closed without needing a context.
+    #[must_use]
     pub fn is_closed(&self) -> bool {
         self.data_tx.is_closed()
     }
@@ -55,17 +56,16 @@ impl BodySender {
         self.ready().await?;
         self.data_tx
             .try_send(Ok(chunk.into()))
-            .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to send data: {}", e)))
+            .map_err(|e| IoError::other(format!("failed to send data: {e}")))
     }
 
     /// Send trailers on trailers channel.
     pub async fn send_trailers(&mut self, trailers: HeaderMap) -> IoResult<()> {
-        let tx = match self.trailers_tx.take() {
-            Some(tx) => tx,
-            None => return Err(IoError::new(ErrorKind::Other, "failed to send railers")),
+        let Some(tx) = self.trailers_tx.take() else {
+            return Err(IoError::other("failed to send railers"));
         };
         tx.send(trailers)
-            .map_err(|_| IoError::new(ErrorKind::Other, "failed to send railers"))
+            .map_err(|_| IoError::other("failed to send railers"))
     }
 
     /// Send error on data channel.
@@ -88,14 +88,16 @@ impl futures_util::AsyncWrite for BodySender {
             Poll::Ready(Ok(())) => {
                 let data: Bytes = Bytes::from(buf.to_vec());
                 let len = buf.len();
-                Poll::Ready(self.data_tx.try_send(Ok(data)).map(|_| len).map_err(|e| {
-                    IoError::new(ErrorKind::Other, format!("failed to send data: {}", e))
-                }))
+                Poll::Ready(
+                    self.data_tx
+                        .try_send(Ok(data))
+                        .map(|_| len)
+                        .map_err(|e| IoError::other(format!("failed to send data: {e}"))),
+                )
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(IoError::new(
-                ErrorKind::Other,
-                format!("failed to poll ready: {}", e),
-            ))),
+            Poll::Ready(Err(e)) => {
+                Poll::Ready(Err(IoError::other(format!("failed to poll ready: {e}"))))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -123,14 +125,16 @@ impl tokio::io::AsyncWrite for BodySender {
             Poll::Ready(Ok(())) => {
                 let data: Bytes = Bytes::from(buf.to_vec());
                 let len = buf.len();
-                Poll::Ready(self.data_tx.try_send(Ok(data)).map(|_| len).map_err(|e| {
-                    IoError::new(ErrorKind::Other, format!("failed to send data: {}", e))
-                }))
+                Poll::Ready(
+                    self.data_tx
+                        .try_send(Ok(data))
+                        .map(|_| len)
+                        .map_err(|e| IoError::other(format!("failed to send data: {e}"))),
+                )
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(IoError::new(
-                ErrorKind::Other,
-                format!("failed to poll ready: {}", e),
-            ))),
+            Poll::Ready(Err(e)) => {
+                Poll::Ready(Err(IoError::other(format!("failed to poll ready: {e}"))))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -160,4 +164,77 @@ impl Debug for BodySender {
 pub struct BodyReceiver {
     pub(crate) data_rx: mpsc::Receiver<Result<Bytes, IoError>>,
     pub(crate) trailers_rx: oneshot::Receiver<HeaderMap>,
+}
+impl Debug for BodyReceiver {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BodyReceiver").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Error as IoError;
+
+    use bytes::Bytes;
+    use futures_channel::{mpsc, oneshot};
+    use futures_util::StreamExt;
+    use hyper::HeaderMap;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_send_data_and_is_closed() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let (trailers_tx, _trailers_rx) = oneshot::channel();
+        let mut sender = BodySender {
+            data_tx: tx,
+            trailers_tx: Some(trailers_tx),
+        };
+        assert!(!sender.is_closed());
+        sender.send_data("hello").await.unwrap();
+        let got = rx.next().await.unwrap().unwrap();
+        assert_eq!(got, Bytes::from("hello"));
+        sender.close();
+        assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn test_send_trailers() {
+        let (tx, _rx) = mpsc::channel(1);
+        let (trailers_tx, trailers_rx) = oneshot::channel();
+        let mut sender = BodySender {
+            data_tx: tx,
+            trailers_tx: Some(trailers_tx),
+        };
+        let mut map = HeaderMap::new();
+        map.insert("x-test", "1".parse().unwrap());
+        sender.send_trailers(map.clone()).await.unwrap();
+        let got = trailers_rx.await.unwrap();
+        assert_eq!(got["x-test"], "1");
+    }
+
+    #[tokio::test]
+    async fn test_send_error() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let (trailers_tx, _trailers_rx) = oneshot::channel();
+        let mut sender = BodySender {
+            data_tx: tx,
+            trailers_tx: Some(trailers_tx),
+        };
+        sender.send_error(IoError::other("fail"));
+        let got = rx.next().await.unwrap();
+        assert!(got.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_disconnect() {
+        let (tx, _rx) = mpsc::channel(1);
+        let (trailers_tx, _trailers_rx) = oneshot::channel();
+        let mut sender = BodySender {
+            data_tx: tx,
+            trailers_tx: Some(trailers_tx),
+        };
+        sender.disconnect();
+        assert!(sender.is_closed());
+    }
 }

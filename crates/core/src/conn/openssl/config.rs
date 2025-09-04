@@ -9,7 +9,6 @@ use futures_util::stream::{Once, Stream, once};
 use openssl::pkey::PKey;
 use openssl::ssl::{SslAcceptor, SslMethod};
 use openssl::x509::X509;
-use tokio::io::ErrorKind;
 
 use crate::conn::IntoConfigStream;
 
@@ -31,6 +30,7 @@ impl Default for Keycert {
 impl Keycert {
     /// Create a new keycert.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             key: vec![],
@@ -47,6 +47,7 @@ impl Keycert {
 
     /// Sets the Tls private key via bytes slice.
     #[inline]
+    #[must_use]
     pub fn with_key(mut self, key: impl Into<Vec<u8>>) -> Self {
         self.key = key.into();
         self
@@ -62,6 +63,7 @@ impl Keycert {
 
     /// Sets the Tls certificate via bytes slice
     #[inline]
+    #[must_use]
     pub fn with_cert(mut self, cert: impl Into<Vec<u8>>) -> Self {
         self.cert = cert.into();
         self
@@ -71,7 +73,7 @@ impl Keycert {
     #[inline]
     pub fn key(&mut self) -> IoResult<&[u8]> {
         if self.key.is_empty() {
-            Err(IoError::new(ErrorKind::Other, "empty key"))
+            Err(IoError::other("empty key"))
         } else {
             Ok(&self.key)
         }
@@ -81,13 +83,14 @@ impl Keycert {
     #[inline]
     pub fn cert(&mut self) -> IoResult<&[u8]> {
         if self.cert.is_empty() {
-            Err(IoError::new(ErrorKind::Other, "empty cert"))
+            Err(IoError::other("empty cert"))
         } else {
             Ok(&self.cert)
         }
     }
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn alpn_protocols() -> Vec<u8> {
     #[allow(unused_mut)]
     let mut alpn_protocols: Vec<Vec<u8>> = Vec::with_capacity(3);
@@ -122,8 +125,9 @@ impl Debug for OpensslConfig {
 impl OpensslConfig {
     /// Create new `OpensslConfig`
     #[inline]
+    #[must_use]
     pub fn new(keycert: Keycert) -> Self {
-        OpensslConfig {
+        Self {
             keycert,
             builder_modifier: None,
             alpn_protocols: alpn_protocols(),
@@ -131,6 +135,7 @@ impl OpensslConfig {
     }
 
     /// Set builder modifier.
+    #[must_use]
     pub fn builder_modifier<F>(mut self, modifier: F) -> Self
     where
         F: FnMut(&mut SslAcceptorBuilder) + Send + 'static,
@@ -141,6 +146,7 @@ impl OpensslConfig {
 
     /// Set specific protocols through ALPN (Application-Layer Protocol Negotiation).
     #[inline]
+    #[must_use]
     pub fn alpn_protocols(mut self, alpn_protocols: impl Into<Vec<u8>>) -> Self {
         self.alpn_protocols = alpn_protocols.into();
         self
@@ -155,7 +161,7 @@ impl OpensslConfig {
         builder.set_certificate(
             certs
                 .next()
-                .ok_or_else(|| IoError::new(ErrorKind::Other, "no leaf certificate"))?
+                .ok_or_else(|| IoError::other("no leaf certificate"))?
                 .as_ref(),
         )?;
         certs.try_for_each(|cert| builder.add_extra_chain_cert(cert))?;
@@ -189,8 +195,8 @@ impl TryInto<SslAcceptorBuilder> for OpensslConfig {
     }
 }
 
-impl IntoConfigStream<OpensslConfig> for OpensslConfig {
-    type Stream = Once<Ready<OpensslConfig>>;
+impl IntoConfigStream<Self> for OpensslConfig {
+    type Stream = Once<Ready<Self>>;
 
     fn into_stream(self) -> Self::Stream {
         once(ready(self))

@@ -70,18 +70,18 @@ impl FromStr for CompressionAlgo {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             #[cfg(feature = "brotli")]
-            "br" => Ok(CompressionAlgo::Brotli),
+            "br" => Ok(Self::Brotli),
             #[cfg(feature = "brotli")]
-            "brotli" => Ok(CompressionAlgo::Brotli),
+            "brotli" => Ok(Self::Brotli),
 
             #[cfg(feature = "deflate")]
-            "deflate" => Ok(CompressionAlgo::Deflate),
+            "deflate" => Ok(Self::Deflate),
 
             #[cfg(feature = "gzip")]
-            "gzip" => Ok(CompressionAlgo::Gzip),
+            "gzip" => Ok(Self::Gzip),
 
             #[cfg(feature = "zstd")]
-            "zstd" => Ok(CompressionAlgo::Zstd),
+            "zstd" => Ok(Self::Zstd),
             _ => Err(format!("unknown compression algorithm: {s}")),
         }
     }
@@ -93,13 +93,13 @@ impl Display for CompressionAlgo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             #[cfg(feature = "brotli")]
-            CompressionAlgo::Brotli => write!(f, "br"),
+            Self::Brotli => write!(f, "br"),
             #[cfg(feature = "deflate")]
-            CompressionAlgo::Deflate => write!(f, "deflate"),
+            Self::Deflate => write!(f, "deflate"),
             #[cfg(feature = "gzip")]
-            CompressionAlgo::Gzip => write!(f, "gzip"),
+            Self::Gzip => write!(f, "gzip"),
             #[cfg(feature = "zstd")]
-            CompressionAlgo::Zstd => write!(f, "zstd"),
+            Self::Zstd => write!(f, "zstd"),
             _ => unreachable!(),
         }
     }
@@ -110,13 +110,13 @@ impl From<CompressionAlgo> for HeaderValue {
     fn from(algo: CompressionAlgo) -> Self {
         match algo {
             #[cfg(feature = "brotli")]
-            CompressionAlgo::Brotli => HeaderValue::from_static("br"),
+            CompressionAlgo::Brotli => Self::from_static("br"),
             #[cfg(feature = "deflate")]
-            CompressionAlgo::Deflate => HeaderValue::from_static("deflate"),
+            CompressionAlgo::Deflate => Self::from_static("deflate"),
             #[cfg(feature = "gzip")]
-            CompressionAlgo::Gzip => HeaderValue::from_static("gzip"),
+            CompressionAlgo::Gzip => Self::from_static("gzip"),
             #[cfg(feature = "zstd")]
-            CompressionAlgo::Zstd => HeaderValue::from_static("zstd"),
+            CompressionAlgo::Zstd => Self::from_static("zstd"),
         }
     }
 }
@@ -167,12 +167,14 @@ impl Default for Compression {
 impl Compression {
     /// Create a new `Compression`.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
 
     /// Remove all compression algorithms.
     #[inline]
+    #[must_use]
     pub fn disable_all(mut self) -> Self {
         self.algos.clear();
         self
@@ -182,6 +184,7 @@ impl Compression {
     #[cfg(feature = "gzip")]
     #[cfg_attr(docsrs, doc(cfg(feature = "gzip")))]
     #[inline]
+    #[must_use]
     pub fn enable_gzip(mut self, level: CompressionLevel) -> Self {
         self.algos.insert(CompressionAlgo::Gzip, level);
         self
@@ -190,6 +193,7 @@ impl Compression {
     #[cfg(feature = "gzip")]
     #[cfg_attr(docsrs, doc(cfg(feature = "gzip")))]
     #[inline]
+    #[must_use]
     pub fn disable_gzip(mut self) -> Self {
         self.algos.shift_remove(&CompressionAlgo::Gzip);
         self
@@ -198,6 +202,7 @@ impl Compression {
     #[cfg(feature = "zstd")]
     #[cfg_attr(docsrs, doc(cfg(feature = "zstd")))]
     #[inline]
+    #[must_use]
     pub fn enable_zstd(mut self, level: CompressionLevel) -> Self {
         self.algos.insert(CompressionAlgo::Zstd, level);
         self
@@ -206,6 +211,7 @@ impl Compression {
     #[cfg(feature = "zstd")]
     #[cfg_attr(docsrs, doc(cfg(feature = "zstd")))]
     #[inline]
+    #[must_use]
     pub fn disable_zstd(mut self) -> Self {
         self.algos.shift_remove(&CompressionAlgo::Zstd);
         self
@@ -214,6 +220,7 @@ impl Compression {
     #[cfg(feature = "brotli")]
     #[cfg_attr(docsrs, doc(cfg(feature = "brotli")))]
     #[inline]
+    #[must_use]
     pub fn enable_brotli(mut self, level: CompressionLevel) -> Self {
         self.algos.insert(CompressionAlgo::Brotli, level);
         self
@@ -222,6 +229,7 @@ impl Compression {
     #[cfg(feature = "brotli")]
     #[cfg_attr(docsrs, doc(cfg(feature = "brotli")))]
     #[inline]
+    #[must_use]
     pub fn disable_brotli(mut self) -> Self {
         self.algos.shift_remove(&CompressionAlgo::Brotli);
         self
@@ -231,6 +239,7 @@ impl Compression {
     #[cfg(feature = "deflate")]
     #[cfg_attr(docsrs, doc(cfg(feature = "deflate")))]
     #[inline]
+    #[must_use]
     pub fn enable_deflate(mut self, level: CompressionLevel) -> Self {
         self.algos.insert(CompressionAlgo::Deflate, level);
         self
@@ -240,6 +249,7 @@ impl Compression {
     #[cfg(feature = "deflate")]
     #[cfg_attr(docsrs, doc(cfg(feature = "deflate")))]
     #[inline]
+    #[must_use]
     pub fn disable_deflate(mut self) -> Self {
         self.algos.shift_remove(&CompressionAlgo::Deflate);
         self
@@ -248,12 +258,14 @@ impl Compression {
     /// Sets minimum compression size, if body is less than this value, no compression
     /// default is 1kb
     #[inline]
+    #[must_use]
     pub fn min_length(mut self, size: usize) -> Self {
         self.min_length = size;
         self
     }
     /// Sets `Compression` with force_priority.
     #[inline]
+    #[must_use]
     pub fn force_priority(mut self, force_priority: bool) -> Self {
         self.force_priority = force_priority;
         self
@@ -261,6 +273,7 @@ impl Compression {
 
     /// Sets `Compression` with content types list.
     #[inline]
+    #[must_use]
     pub fn content_types(mut self, content_types: &[Mime]) -> Self {
         self.content_types = content_types.to_vec();
         self
@@ -341,10 +354,8 @@ impl Handler for Compression {
             return;
         }
 
-        if let Some(code) = res.status_code {
-            if code == StatusCode::SWITCHING_PROTOCOLS || code == StatusCode::NO_CONTENT {
-                return;
-            }
+        if let Some(StatusCode::SWITCHING_PROTOCOLS | StatusCode::NO_CONTENT) = res.status_code {
+            return;
         }
 
         match res.take_body() {
@@ -356,15 +367,12 @@ impl Handler for Compression {
                     res.body(ResBody::Once(bytes));
                     return;
                 }
-                match self.negotiate(req, res) {
-                    Some((algo, level)) => {
-                        res.stream(EncodeStream::new(algo, level, Some(bytes)));
-                        res.headers_mut().append(CONTENT_ENCODING, algo.into());
-                    }
-                    None => {
-                        res.body(ResBody::Once(bytes));
-                        return;
-                    }
+                if let Some((algo, level)) = self.negotiate(req, res) {
+                    res.stream(EncodeStream::new(algo, level, Some(bytes)));
+                    res.headers_mut().append(CONTENT_ENCODING, algo.into());
+                } else {
+                    res.body(ResBody::Once(bytes));
+                    return;
                 }
             }
             ResBody::Chunks(chunks) => {
@@ -375,38 +383,31 @@ impl Handler for Compression {
                         return;
                     }
                 }
-                match self.negotiate(req, res) {
-                    Some((algo, level)) => {
-                        res.stream(EncodeStream::new(algo, level, chunks));
-                        res.headers_mut().append(CONTENT_ENCODING, algo.into());
-                    }
-                    None => {
-                        res.body(ResBody::Chunks(chunks));
-                        return;
-                    }
+                if let Some((algo, level)) = self.negotiate(req, res) {
+                    res.stream(EncodeStream::new(algo, level, chunks));
+                    res.headers_mut().append(CONTENT_ENCODING, algo.into());
+                } else {
+                    res.body(ResBody::Chunks(chunks));
+                    return;
                 }
             }
-            ResBody::Hyper(body) => match self.negotiate(req, res) {
-                Some((algo, level)) => {
+            ResBody::Hyper(body) => {
+                if let Some((algo, level)) = self.negotiate(req, res) {
                     res.stream(EncodeStream::new(algo, level, body));
                     res.headers_mut().append(CONTENT_ENCODING, algo.into());
-                }
-                None => {
+                } else {
                     res.body(ResBody::Hyper(body));
                     return;
                 }
-            },
+            }
             ResBody::Stream(body) => {
                 let body = body.into_inner();
-                match self.negotiate(req, res) {
-                    Some((algo, level)) => {
-                        res.stream(EncodeStream::new(algo, level, body));
-                        res.headers_mut().append(CONTENT_ENCODING, algo.into());
-                    }
-                    None => {
-                        res.body(ResBody::stream(body));
-                        return;
-                    }
+                if let Some((algo, level)) = self.negotiate(req, res) {
+                    res.stream(EncodeStream::new(algo, level, body));
+                    res.headers_mut().append(CONTENT_ENCODING, algo.into());
+                } else {
+                    res.body(ResBody::stream(body));
+                    return;
                 }
             }
             body => {
@@ -468,6 +469,97 @@ mod tests {
             .send(router)
             .await;
         assert_eq!(res.headers().get(CONTENT_ENCODING).unwrap(), "deflate");
+        let content = res.take_string().await.unwrap();
+        assert_eq!(content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_zstd() {
+        let comp_handler = Compression::new().min_length(1);
+        let router = Router::with_hoop(comp_handler).push(Router::with_path("hello").get(hello));
+
+        let mut res = TestClient::get("http://127.0.0.1:5801/hello")
+            .add_header(ACCEPT_ENCODING, "zstd", true)
+            .send(router)
+            .await;
+        assert_eq!(res.headers().get(CONTENT_ENCODING).unwrap(), "zstd");
+        let content = res.take_string().await.unwrap();
+        assert_eq!(content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_min_length_not_compress() {
+        let comp_handler = Compression::new().min_length(10);
+        let router = Router::with_hoop(comp_handler).push(Router::with_path("hello").get(hello));
+
+        let res = TestClient::get("http://127.0.0.1:5801/hello")
+            .add_header(ACCEPT_ENCODING, "gzip", true)
+            .send(router)
+            .await;
+        assert!(res.headers().get(CONTENT_ENCODING).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_min_length_should_compress() {
+        let comp_handler = Compression::new().min_length(1);
+        let router = Router::with_hoop(comp_handler).push(Router::with_path("hello").get(hello));
+
+        let res = TestClient::get("http://127.0.0.1:5801/hello")
+            .add_header(ACCEPT_ENCODING, "gzip", true)
+            .send(router)
+            .await;
+        assert!(res.headers().get(CONTENT_ENCODING).is_some());
+    }
+
+    #[handler]
+    async fn hello_html(res: &mut Response) {
+        res.render(Text::Html("<html><body>hello</body></html>"));
+    }
+    #[tokio::test]
+    async fn test_content_types_should_compress() {
+        let comp_handler = Compression::new()
+            .min_length(1)
+            .content_types(&[mime::TEXT_HTML]);
+        let router =
+            Router::with_hoop(comp_handler).push(Router::with_path("hello").get(hello_html));
+
+        let res = TestClient::get("http://127.0.0.1:5801/hello")
+            .add_header(ACCEPT_ENCODING, "gzip", true)
+            .send(router)
+            .await;
+        assert!(res.headers().get(CONTENT_ENCODING).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_content_types_not_compress() {
+        let comp_handler = Compression::new()
+            .min_length(1)
+            .content_types(&[mime::APPLICATION_JSON]);
+        let router =
+            Router::with_hoop(comp_handler).push(Router::with_path("hello").get(hello_html));
+
+        let res = TestClient::get("http://127.0.0.1:5801/hello")
+            .add_header(ACCEPT_ENCODING, "gzip", true)
+            .send(router)
+            .await;
+        assert!(res.headers().get(CONTENT_ENCODING).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_force_priority() {
+        let comp_handler = Compression::new()
+            .disable_all()
+            .enable_brotli(CompressionLevel::Default)
+            .enable_gzip(CompressionLevel::Default)
+            .min_length(1)
+            .force_priority(true);
+        let router = Router::with_hoop(comp_handler).push(Router::with_path("hello").get(hello));
+
+        let mut res = TestClient::get("http://127.0.0.1:5801/hello")
+            .add_header(ACCEPT_ENCODING, "gzip, br", true)
+            .send(router)
+            .await;
+        assert_eq!(res.headers().get(CONTENT_ENCODING).unwrap(), "br");
         let content = res.take_string().await.unwrap();
         assert_eq!(content, "hello");
     }

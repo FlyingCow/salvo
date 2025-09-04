@@ -17,13 +17,15 @@ mod allow_credentials;
 mod allow_headers;
 mod allow_methods;
 mod allow_origin;
+mod allow_private_network;
 mod expose_headers;
 mod max_age;
 mod vary;
 
 pub use self::{
     allow_credentials::AllowCredentials, allow_headers::AllowHeaders, allow_methods::AllowMethods,
-    allow_origin::AllowOrigin, expose_headers::ExposeHeaders, max_age::MaxAge, vary::Vary,
+    allow_origin::AllowOrigin, allow_private_network::AllowPrivateNetwork,
+    expose_headers::ExposeHeaders, max_age::MaxAge, vary::Vary,
 };
 
 static WILDCARD: HeaderValue = HeaderValue::from_static("*");
@@ -62,6 +64,7 @@ pub struct Cors {
     allow_headers: AllowHeaders,
     allow_methods: AllowMethods,
     allow_origin: AllowOrigin,
+    allow_private_network: AllowPrivateNetwork,
     expose_headers: ExposeHeaders,
     max_age: MaxAge,
     vary: Vary,
@@ -76,12 +79,14 @@ impl Default for Cors {
 impl Cors {
     /// Create new `Cors`.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
-        Cors {
+        Self {
             allow_credentials: Default::default(),
             allow_headers: Default::default(),
             allow_methods: Default::default(),
             allow_origin: Default::default(),
+            allow_private_network: Default::default(),
             expose_headers: Default::default(),
             max_age: Default::default(),
             vary: Default::default(),
@@ -94,6 +99,7 @@ impl Cors {
     /// - All methods allowed.
     /// - All origins allowed.
     /// - All headers exposed.
+    #[must_use]
     pub fn permissive() -> Self {
         Self::new()
             .allow_headers(Any)
@@ -111,6 +117,7 @@ impl Cors {
     /// - The header names received in `Access-Control-Request-Headers` are sent
     ///   back as allowed headers.
     /// - No headers are currently exposed, but this may change in the future.
+    #[must_use]
     pub fn very_permissive() -> Self {
         Self::new()
             .allow_credentials(true)
@@ -121,6 +128,7 @@ impl Cors {
 
     /// Sets whether to add the `Access-Control-Allow-Credentials` header.
     #[inline]
+    #[must_use]
     pub fn allow_credentials(mut self, allow_credentials: impl Into<AllowCredentials>) -> Self {
         self.allow_credentials = allow_credentials.into();
         self
@@ -134,6 +142,7 @@ impl Cors {
     ///
     /// Panics if any of the headers are not a valid `http::header::HeaderName`.
     #[inline]
+    #[must_use]
     pub fn allow_headers(mut self, headers: impl Into<AllowHeaders>) -> Self {
         self.allow_headers = headers.into();
         self
@@ -152,6 +161,7 @@ impl Cors {
     /// let cors = Cors::new().max_age(Duration::from_secs(30)); // or a Duration
     /// ```
     #[inline]
+    #[must_use]
     pub fn max_age(mut self, max_age: impl Into<MaxAge>) -> Self {
         self.max_age = max_age.into();
         self
@@ -163,6 +173,7 @@ impl Cors {
     ///
     /// Panics if the provided argument is not a valid `http::Method`.
     #[inline]
+    #[must_use]
     pub fn allow_methods<I>(mut self, methods: I) -> Self
     where
         I: Into<AllowMethods>,
@@ -172,9 +183,98 @@ impl Cors {
     }
 
     /// Set the value of the [`Access-Control-Allow-Origin`][mdn] header.
+    /// ```
+    /// use salvo_core::http::HeaderValue;
+    /// use salvo_cors::Cors;
+    ///
+    /// let cors = Cors::new().allow_origin(
+    ///     "http://example.com".parse::<HeaderValue>().unwrap(),
+    /// );
+    /// ```
+    ///
+    /// Multiple origins can be allowed with
+    ///
+    /// ```
+    /// use salvo_cors::Cors;
+    ///
+    /// let origins = ["http://example.com", "http://api.example.com"];
+    ///
+    /// let cors = Cors::new().allow_origin(origins);
+    /// ```
+    ///
+    /// All origins can be allowed with
+    ///
+    /// ```
+    /// use salvo_cors::{Any, Cors};
+    ///
+    /// let cors = Cors::new().allow_origin(Any);
+    /// ```
+    ///
+    /// You can also use a closure
+    ///
+    /// ```
+    /// use salvo_cors::{Cors, AllowOrigin};
+    /// use salvo_core::http::HeaderValue;
+    /// use salvo_core::{Depot, Request};
+    ///
+    /// let cors = Cors::new().allow_origin(AllowOrigin::dynamic(
+    ///     |origin: Option<&HeaderValue>, _req: &Request, _depot: &Depot| {
+    ///         if origin?.as_bytes().ends_with(b".rust-lang.org") {
+    ///             origin.cloned()
+    ///         } else {
+    ///             None
+    ///         }
+    ///     },
+    /// ));
+    /// ```
+    ///
+    /// You can also use an async closure, make sure all the values are owned
+    /// before passing into the future:
+    ///
+    /// ```
+    /// # #[derive(Clone)]
+    /// # struct Client;
+    /// # fn get_api_client() -> Client {
+    /// #     Client
+    /// # }
+    /// # impl Client {
+    /// #     async fn fetch_allowed_origins(&self) -> Vec<HeaderValue> {
+    /// #         vec![HeaderValue::from_static("http://example.com")]
+    /// #     }
+    /// #     async fn fetch_allowed_origins_for_path(&self, _path: String) -> Vec<HeaderValue> {
+    /// #         vec![HeaderValue::from_static("http://example.com")]
+    /// #     }
+    /// # }
+    /// use salvo_cors::{Cors, AllowOrigin};
+    /// use salvo_core::http::header::HeaderValue;
+    /// use salvo_core::{Depot, Request};
+    ///
+    ///
+    /// let cors = Cors::new().allow_origin(AllowOrigin::dynamic_async(
+    ///     |origin: Option<&HeaderValue>, _req: &Request, _depot: &Depot| {
+    ///         let origin = origin.cloned();
+    ///         async move {
+    ///             let client = get_api_client();
+    ///             // fetch list of origins that are allowed
+    ///             let origins = client.fetch_allowed_origins().await;
+    ///             if origins.contains(origin.as_ref()?) {
+    ///                 origin
+    ///             } else {
+    ///                 None
+    ///             }
+    ///         }
+    ///     },
+    /// ));
+    /// ```
+    ///
+    /// **Note** that multiple calls to this method will override any previous
+    /// calls.
+    ///
+    /// **Note** origin must contain http or https protocol name.
     ///
     /// [mdn]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
     #[inline]
+    #[must_use]
     pub fn allow_origin(mut self, origin: impl Into<AllowOrigin>) -> Self {
         self.allow_origin = origin.into();
         self
@@ -184,8 +284,27 @@ impl Cors {
     ///
     /// [mdn]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Expose-Headers
     #[inline]
+    #[must_use]
     pub fn expose_headers(mut self, headers: impl Into<ExposeHeaders>) -> Self {
         self.expose_headers = headers.into();
+        self
+    }
+
+    /// Set the value of the [`Access-Control-Allow-Private-Network`][wicg] header.
+    ///
+    /// ```
+    /// use salvo_cors::Cors;
+    ///
+    /// let cors = Cors::new().allow_private_network(true);
+    /// ```
+    ///
+    /// [wicg]: https://wicg.github.io/private-network-access/
+    #[must_use]
+    pub fn allow_private_network<T>(mut self, allow_private_network: T) -> Self
+    where
+        T: Into<AllowPrivateNetwork>,
+    {
+        self.allow_private_network = allow_private_network.into();
         self
     }
 
@@ -199,6 +318,7 @@ impl Cors {
     /// vary header accordingly.
     ///
     /// [mdn]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Vary
+    #[must_use]
     pub fn vary<T>(mut self, headers: impl Into<Vary>) -> Self {
         self.vary = headers.into();
         self
@@ -281,8 +401,19 @@ impl Handler for CorsHandler {
 
         // These headers are applied to both preflight and subsequent regular CORS requests:
         // https://fetch.spec.whatwg.org/#http-responses
-        headers.extend(self.cors.allow_origin.to_header(origin, req, depot));
-        headers.extend(self.cors.allow_credentials.to_header(origin, req, depot));
+        headers.extend(self.cors.allow_origin.to_header(origin, req, depot).await);
+        headers.extend(
+            self.cors
+                .allow_credentials
+                .to_header(origin, req, depot)
+                .await,
+        );
+        headers.extend(
+            self.cors
+                .allow_private_network
+                .to_header(origin, req, depot)
+                .await,
+        );
 
         let mut vary_headers = self.cors.vary.values();
         if let Some(first) = vary_headers.next() {
@@ -301,13 +432,13 @@ impl Handler for CorsHandler {
         // Return results immediately upon preflight request
         if req.method() == Method::OPTIONS {
             // These headers are applied only to preflight requests
-            headers.extend(self.cors.allow_methods.to_header(origin, req, depot));
-            headers.extend(self.cors.allow_headers.to_header(origin, req, depot));
-            headers.extend(self.cors.max_age.to_header(origin, req, depot));
+            headers.extend(self.cors.allow_methods.to_header(origin, req, depot).await);
+            headers.extend(self.cors.allow_headers.to_header(origin, req, depot).await);
+            headers.extend(self.cors.max_age.to_header(origin, req, depot).await);
             res.status_code = Some(StatusCode::NO_CONTENT);
         } else {
             // This header is applied only to non-preflight requests
-            headers.extend(self.cors.expose_headers.to_header(origin, req, depot));
+            headers.extend(self.cors.expose_headers.to_header(origin, req, depot).await);
         }
         res.headers_mut().extend(headers);
 

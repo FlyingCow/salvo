@@ -47,7 +47,7 @@ pub(crate) use self::{
 pub(crate) use proc_macro2_diagnostics::{Diagnostic, Level as DiagLevel};
 pub(crate) use salvo_serde_util::{self as serde_util, RenameRule, SerdeContainer, SerdeValue};
 
-/// Enhanced of [handler][handler] for generate OpenAPI documention, [Read more][more].
+/// Enhanced of [handler][handler] for generate OpenAPI documentation, [Read more][more].
 ///
 /// [handler]: ../salvo_core/attr.handler.html
 /// [more]: ../salvo_oapi/endpoint/index.html
@@ -582,7 +582,7 @@ mod tests {
                     }
                 }
                 impl<'__macro_gen_ex> salvo::Extractible<'__macro_gen_ex> for PetQuery {
-                    fn metadata() -> &'__macro_gen_ex salvo::extract::Metadata {
+                    fn metadata() -> &'static salvo::extract::Metadata {
                         static METADATA: ::std::sync::OnceLock<salvo::extract::Metadata> = ::std::sync::OnceLock::new();
                         METADATA.get_or_init(||
                             salvo::extract::Metadata::new("PetQuery")

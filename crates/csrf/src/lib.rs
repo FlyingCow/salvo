@@ -11,6 +11,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use std::error::Error as StdError;
+use std::fmt::{self, Debug, Formatter};
 
 mod finder;
 
@@ -32,7 +33,7 @@ cfg_feature! {
     pub use cookie_store::CookieStore;
 
     /// Helper function to create a `CookieStore`.
-    pub fn cookie_store<>() -> CookieStore {
+    #[must_use] pub fn cookie_store<>() -> CookieStore {
         CookieStore::new()
     }
 }
@@ -43,6 +44,7 @@ cfg_feature! {
     pub use session_store::SessionStore;
 
     /// Helper function to create a `SessionStore`.
+    #[must_use]
     pub fn session_store() -> SessionStore {
         SessionStore::new()
     }
@@ -193,7 +195,7 @@ pub trait CsrfCipher: Send + Sync + 'static {
     }
 }
 
-/// Extesion for Depot.
+/// Extension for Depot.
 pub trait CsrfDepotExt {
     /// Get csrf token reference from depot.
     fn csrf_token(&self) -> Option<&str>;
@@ -214,9 +216,23 @@ pub struct Csrf<C, S> {
     finders: Vec<Box<dyn CsrfTokenFinder>>,
 }
 
+impl<C, S> Debug for Csrf<C, S>
+where
+    C: Debug,
+    S: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Csrf")
+            .field("cipher", &self.cipher)
+            .field("store", &self.store)
+            .finish()
+    }
+}
+
 impl<C: CsrfCipher, S: CsrfStore> Csrf<C, S> {
     /// Create a new instance.
     #[inline]
+    #[must_use]
     pub fn new(cipher: C, store: S, finder: impl CsrfTokenFinder) -> Self {
         Self {
             cipher,
@@ -228,6 +244,7 @@ impl<C: CsrfCipher, S: CsrfStore> Csrf<C, S> {
 
     /// Add finder to find csrf token.
     #[inline]
+    #[must_use]
     pub fn add_finder(mut self, finder: impl CsrfTokenFinder) -> Self {
         self.finders.push(Box::new(finder));
         self

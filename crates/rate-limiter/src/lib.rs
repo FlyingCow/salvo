@@ -17,6 +17,7 @@
 
 use std::borrow::Borrow;
 use std::error::Error as StdError;
+use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 
 use salvo_core::conn::SocketAddr;
@@ -73,6 +74,7 @@ where
 }
 
 /// Identify user by IP address.
+#[derive(Debug)]
 pub struct RemoteIpIssuer;
 impl RateIssuer for RemoteIpIssuer {
     type Key = String;
@@ -136,10 +138,28 @@ pub struct RateLimiter<G, S, I, Q> {
     add_headers: bool,
     skipper: Box<dyn Skipper>,
 }
+impl<G, S, I, Q> Debug for RateLimiter<G, S, I, Q>
+where
+    G: Debug,
+    S: Debug,
+    I: Debug,
+    Q: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("guard", &self.guard)
+            .field("store", &self.store)
+            .field("issuer", &self.issuer)
+            .field("quota_getter", &self.quota_getter)
+            .field("add_headers", &self.add_headers)
+            .finish()
+    }
+}
 
 impl<G: RateGuard, S: RateStore, I: RateIssuer, P: QuotaGetter<I::Key>> RateLimiter<G, S, I, P> {
     /// Create a new `RateLimiter`
     #[inline]
+    #[must_use]
     pub fn new(guard: G, store: S, issuer: I, quota_getter: P) -> Self {
         Self {
             guard,
@@ -153,6 +173,7 @@ impl<G: RateGuard, S: RateStore, I: RateIssuer, P: QuotaGetter<I::Key>> RateLimi
 
     /// Sets skipper and returns new `RateLimiter`.
     #[inline]
+    #[must_use]
     pub fn with_skipper(mut self, skipper: impl Skipper) -> Self {
         self.skipper = Box::new(skipper);
         self
@@ -161,6 +182,7 @@ impl<G: RateGuard, S: RateStore, I: RateIssuer, P: QuotaGetter<I::Key>> RateLimi
     /// Sets `add_headers` and returns new `RateLimiter`.
     /// If `add_headers` is true, the rate limit headers will be added to the response.
     #[inline]
+    #[must_use]
     pub fn add_headers(mut self, add_headers: bool) -> Self {
         self.add_headers = add_headers;
         self
@@ -185,13 +207,10 @@ where
         if self.skipper.skipped(req, depot) {
             return;
         }
-        let key = match self.issuer.issue(req, depot).await {
-            Some(key) => key,
-            None => {
-                res.render(StatusError::bad_request().brief("Invalid identifier."));
-                ctrl.skip_rest();
-                return;
-            }
+        let Some(key) = self.issuer.issue(req, depot).await else {
+            res.render(StatusError::bad_request().brief("Invalid identifier."));
+            ctrl.skip_rest();
+            return;
         };
         let quota = match self.quota_getter.get(&key).await {
             Ok(quota) => quota,
@@ -265,7 +284,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fixed_dynmaic_quota() {
+    async fn test_fixed_dynamic_quota() {
         static USER_QUOTAS: LazyLock<HashMap<String, BasicQuota>> = LazyLock::new(|| {
             let mut map = HashMap::new();
             map.insert("user1".into(), BasicQuota::per_second(1));
@@ -298,54 +317,54 @@ mod tests {
         let router = Router::new().push(Router::with_path("limited").hoop(limiter).get(limited));
         let service = Service::new(router);
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
 
-        let respone = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
+        let response = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(response.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
 
-        let respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(response.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        let respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(response.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
     }
 
     #[tokio::test]
-    async fn test_sliding_dynmaic_quota() {
+    async fn test_sliding_dynamic_quota() {
         static USER_QUOTAS: LazyLock<HashMap<String, CelledQuota>> = LazyLock::new(|| {
             let mut map = HashMap::new();
             map.insert("user1".into(), CelledQuota::per_second(1, 1));
@@ -378,49 +397,49 @@ mod tests {
         let router = Router::new().push(Router::with_path("limited").hoop(limiter).get(limited));
         let service = Service::new(router);
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
 
-        let respone = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
+        let response = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(response.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user1")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
 
-        let respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(response.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        let respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
+        assert_eq!(response.status_code, Some(StatusCode::TOO_MANY_REQUESTS));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
+        let mut response = TestClient::get("http://127.0.0.1:5800/limited?user=user2")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
-        assert_eq!(respone.take_string().await.unwrap(), "Limited page");
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_string().await.unwrap(), "Limited page");
     }
 }

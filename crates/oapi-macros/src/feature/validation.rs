@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use syn::LitStr;
@@ -16,7 +14,7 @@ impl Validate for MultipleOf {
             Err(Diagnostic::spanned(
                 self.1.span(),
                 DiagLevel::Error,
-                format!("`multiple_of` error: {}", error),
+                format!("`multiple_of` error: {error}"),
             )
             .help(
                 "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-multipleof`",
@@ -38,7 +36,7 @@ impl ToTokens for MultipleOf {
 }
 impl From<MultipleOf> for Feature {
     fn from(value: MultipleOf) -> Self {
-        Feature::MultipleOf(value)
+        Self::MultipleOf(value)
     }
 }
 impl_get_name!(MultipleOf = "multiple_of");
@@ -49,7 +47,7 @@ impl Validate for Maximum {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
             Err(
-                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`maximum` error: {}", error)).help(
+                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`maximum` error: {error}")).help(
                     "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-maximum`",
                 ),
             )
@@ -73,7 +71,7 @@ impl ToTokens for Maximum {
 }
 impl From<Maximum> for Feature {
     fn from(value: Maximum) -> Self {
-        Feature::Maximum(value)
+        Self::Maximum(value)
     }
 }
 impl_get_name!(Maximum = "maximum");
@@ -89,7 +87,7 @@ impl Validate for Minimum {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
             Err(
-                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`minimum` error: {}", error)).help(
+                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`minimum` error: {error}")).help(
                     "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-minimum`",
                 ),
             )
@@ -113,7 +111,7 @@ impl ToTokens for Minimum {
 }
 impl From<Minimum> for Feature {
     fn from(value: Minimum) -> Self {
-        Feature::Minimum(value)
+        Self::Minimum(value)
     }
 }
 impl_get_name!(Minimum = "minimum");
@@ -123,7 +121,7 @@ pub(crate) struct ExclusiveMaximum(pub(crate) f64, pub(crate) Ident);
 impl Validate for ExclusiveMaximum {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
-            Err(Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`exclusive_maximum` error: {}", error))
+            Err(Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`exclusive_maximum` error: {error}"))
             .help("See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-exclusivemaximum`"))
         } else {
             Ok(())
@@ -145,7 +143,7 @@ impl ToTokens for ExclusiveMaximum {
 }
 impl From<ExclusiveMaximum> for Feature {
     fn from(value: ExclusiveMaximum) -> Self {
-        Feature::ExclusiveMaximum(value)
+        Self::ExclusiveMaximum(value)
     }
 }
 impl_get_name!(ExclusiveMaximum = "exclusive_maximum");
@@ -155,7 +153,7 @@ pub(crate) struct ExclusiveMinimum(pub(crate) f64, pub(crate) Ident);
 impl Validate for ExclusiveMinimum {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
-            Err(Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`exclusive_minimum` error: {}", error))
+            Err(Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`exclusive_minimum` error: {error}"))
             .help("See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-exclusiveminimum`"))
         } else {
             Ok(())
@@ -177,7 +175,7 @@ impl ToTokens for ExclusiveMinimum {
 }
 impl From<ExclusiveMinimum> for Feature {
     fn from(value: ExclusiveMinimum) -> Self {
-        Feature::ExclusiveMinimum(value)
+        Self::ExclusiveMinimum(value)
     }
 }
 impl_get_name!(ExclusiveMinimum = "exclusive_minimum");
@@ -190,7 +188,7 @@ impl Validate for MaxLength {
             Err(Diagnostic::spanned(
                 self.1.span(),
                 DiagLevel::Error,
-                format!("`max_length` error: {}", error),
+                format!("`max_length` error: {error}"),
             )
             .help(
                 "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-maxlength`",
@@ -215,7 +213,7 @@ impl ToTokens for MaxLength {
 }
 impl From<MaxLength> for Feature {
     fn from(value: MaxLength) -> Self {
-        Feature::MaxLength(value)
+        Self::MaxLength(value)
     }
 }
 impl_get_name!(MaxLength = "max_length");
@@ -228,7 +226,7 @@ impl Validate for MinLength {
             Err(Diagnostic::spanned(
                 self.1.span(),
                 DiagLevel::Error,
-                format!("`min_length` error: {}", error),
+                format!("`min_length` error: {error}"),
             )
             .help(
                 "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-minlength`",
@@ -253,7 +251,7 @@ impl ToTokens for MinLength {
 }
 impl From<MinLength> for Feature {
     fn from(value: MinLength) -> Self {
-        Feature::MinLength(value)
+        Self::MinLength(value)
     }
 }
 impl_get_name!(MinLength = "min_length");
@@ -264,7 +262,7 @@ impl Validate for Pattern {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
             Err(
-                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`pattern` error: {}", error)).help(
+                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`pattern` error: {error}")).help(
                     "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-pattern`",
                 ),
             )
@@ -289,7 +287,7 @@ impl ToTokens for Pattern {
 }
 impl From<Pattern> for Feature {
     fn from(value: Pattern) -> Self {
-        Feature::Pattern(value)
+        Self::Pattern(value)
     }
 }
 impl_get_name!(Pattern = "pattern");
@@ -300,7 +298,7 @@ impl Validate for MaxItems {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
             Err(
-                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`max_items` error: {}", error)).help(
+                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`max_items` error: {error}")).help(
                     "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-maxitems",
                 ),
             )
@@ -324,7 +322,7 @@ impl ToTokens for MaxItems {
 }
 impl From<MaxItems> for Feature {
     fn from(value: MaxItems) -> Self {
-        Feature::MaxItems(value)
+        Self::MaxItems(value)
     }
 }
 impl_get_name!(MaxItems = "max_items");
@@ -335,7 +333,7 @@ impl Validate for MinItems {
     fn validate(&self, validator: impl Validator) -> DiagResult<()> {
         if let Err(error) = validator.is_valid() {
             Err(
-                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`min_items` error: {}", error)).help(
+                Diagnostic::spanned(self.1.span(), DiagLevel::Error, format!("`min_items` error: {error}")).help(
                     "See more details: `http://json-schema.org/draft/2020-12/json-schema-validation.html#name-minitems",
                 ),
             )
@@ -359,7 +357,7 @@ impl ToTokens for MinItems {
 }
 impl From<MinItems> for Feature {
     fn from(value: MinItems) -> Self {
-        Feature::MinItems(value)
+        Self::MinItems(value)
     }
 }
 impl_get_name!(MinItems = "min_items");
@@ -382,7 +380,7 @@ impl ToTokens for MaxProperties {
 }
 impl From<MaxProperties> for Feature {
     fn from(value: MaxProperties) -> Self {
-        Feature::MaxProperties(value)
+        Self::MaxProperties(value)
     }
 }
 impl_get_name!(MaxProperties = "max_properties");
@@ -405,7 +403,7 @@ impl ToTokens for MinProperties {
 }
 impl From<MinProperties> for Feature {
     fn from(value: MinProperties) -> Self {
-        Feature::MinProperties(value)
+        Self::MinProperties(value)
     }
 }
 impl_get_name!(MinProperties = "min_properties");

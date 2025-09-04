@@ -1,5 +1,6 @@
 //! openssl module
 use std::error::Error as StdError;
+use std::fmt::{self, Debug, Formatter};
 use std::io::{Error as IoError, Result as IoResult};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -9,20 +10,27 @@ use futures_util::stream::{BoxStream, Stream, StreamExt};
 use futures_util::task::noop_waker_ref;
 use http::uri::Scheme;
 use openssl::ssl::{Ssl, SslAcceptor};
-use tokio::io::ErrorKind;
 use tokio_openssl::SslStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::SslAcceptorBuilder;
 
+use crate::conn::tcp::{DynTcpAcceptor, TcpCoupler, ToDynTcpAcceptor};
 use crate::conn::{Accepted, Acceptor, HandshakeStream, Holding, IntoConfigStream, Listener};
 use crate::fuse::ArcFuseFactory;
-use crate::http::{HttpConnection,};
 
 /// OpensslListener
 pub struct OpensslListener<S, C, T, E> {
     config_stream: S,
     inner: T,
     _phantom: PhantomData<(C, E)>,
+}
+impl<S, C, T: Debug, E> Debug for OpensslListener<S, C, T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpensslListener")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 impl<S, C, T, E> OpensslListener<S, C, T, E>
@@ -35,7 +43,7 @@ where
     /// Create new OpensslListener with config stream.
     #[inline]
     pub fn new(config_stream: S, inner: T) -> Self {
-        OpensslListener {
+        Self {
             config_stream,
             inner,
             _phantom: PhantomData,
@@ -47,9 +55,10 @@ impl<S, C, T, E> Listener for OpensslListener<S, C, T, E>
 where
     S: IntoConfigStream<C> + Send + 'static,
     C: TryInto<SslAcceptorBuilder, Error = E> + Send + 'static,
-    T: Listener + Send,
+    T: Listener + Send + 'static,
     T::Acceptor: Send + 'static,
-    E: StdError + Send,
+    <T::Acceptor as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    E: StdError + Send + 'static,
 {
     type Acceptor = OpensslAcceptor<BoxStream<'static, C>, C, T::Acceptor, E>;
 
@@ -69,15 +78,23 @@ pub struct OpensslAcceptor<S, C, T, E> {
     tls_acceptor: Option<Arc<SslAcceptor>>,
     _phantom: PhantomData<(C, E)>,
 }
+impl<S, C, T, E> Debug for OpensslAcceptor<S, C, T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpensslAcceptor")
+            .field("holdings", &self.holdings)
+            .finish()
+    }
+}
 impl<S, C, T, E> OpensslAcceptor<S, C, T, E>
 where
-    S: Stream<Item = C> + Send + 'static,
+    S: Stream<Item = C> + Unpin + Send + 'static,
     C: TryInto<SslAcceptorBuilder, Error = E> + Send + 'static,
-    T: Acceptor + Send,
-    E: StdError + Send,
+    T: Acceptor + Send + 'static,
+    T::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    E: StdError + Send + 'static,
 {
     /// Create new OpensslAcceptor.
-    pub fn new(config_stream: S, inner: T) -> OpensslAcceptor<S, C, T, E> {
+    pub fn new(config_stream: S, inner: T) -> Self {
         let holdings = inner
             .holdings()
             .iter()
@@ -99,7 +116,7 @@ where
                 }
             })
             .collect();
-        OpensslAcceptor {
+        Self {
             config_stream,
             inner,
             holdings,
@@ -112,6 +129,11 @@ where
     pub fn inner(&self) -> &T {
         &self.inner
     }
+
+    /// Convert this `OpoensslAcceptor` into a boxed `DynTcpAcceptor`.
+    pub fn into_boxed(self) -> Box<dyn DynTcpAcceptor> {
+        Box::new(ToDynTcpAcceptor(self))
+    }
 }
 
 impl<S, C, T, E> Acceptor for OpensslAcceptor<S, C, T, E>
@@ -119,16 +141,21 @@ where
     S: Stream<Item = C> + Send + Unpin + 'static,
     C: TryInto<SslAcceptorBuilder, Error = E> + Send + 'static,
     T: Acceptor + Send + 'static,
+    T::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     E: StdError + Send,
 {
-    type Conn = HandshakeStream<SslStream<T::Conn>>;
+    type Coupler = TcpCoupler<Self::Stream>;
+    type Stream = HandshakeStream<SslStream<T::Stream>>;
 
     /// Get the local address bound to this listener.
     fn holdings(&self) -> &[Holding] {
         &self.holdings
     }
 
-    async fn accept(&mut self, fuse_factory: Option<ArcFuseFactory>) -> IoResult<Accepted<Self::Conn>> {
+    async fn accept(
+        &mut self,
+        fuse_factory: Option<ArcFuseFactory>,
+    ) -> IoResult<Accepted<Self::Coupler, Self::Stream>> {
         let config = {
             let mut config = None;
             while let Poll::Ready(Some(item)) = self
@@ -154,30 +181,31 @@ where
         }
         let tls_acceptor = match &self.tls_acceptor {
             Some(tls_acceptor) => tls_acceptor.clone(),
-            None => return Err(IoError::new(ErrorKind::Other, "openssl: tls_acceptor is none.")),
+            None => return Err(IoError::other("openssl: tls_acceptor is none.")),
         };
 
         let Accepted {
-            conn,
+            coupler: _,
+            stream,
+            fusewire,
             local_addr,
             remote_addr,
             ..
         } = self.inner.accept(fuse_factory).await?;
-        let fusewire = conn.fusewire();
         let conn = async move {
-            let ssl =
-                Ssl::new(tls_acceptor.context()).map_err(|err| IoError::new(ErrorKind::Other, err.to_string()))?;
-            let mut tls_stream =
-                SslStream::new(ssl, conn).map_err(|err| IoError::new(ErrorKind::Other, err.to_string()))?;
+            let ssl = Ssl::new(tls_acceptor.context()).map_err(IoError::other)?;
+            let mut tls_stream = SslStream::new(ssl, stream).map_err(IoError::other)?;
             std::pin::Pin::new(&mut tls_stream)
                 .accept()
                 .await
-                .map_err(|err| IoError::new(ErrorKind::Other, err.to_string()))?;
+                .map_err(IoError::other)?;
             Ok(tls_stream)
         };
 
         Ok(Accepted {
-            conn: HandshakeStream::new(conn, fusewire),
+            coupler: TcpCoupler::new(),
+            stream: HandshakeStream::new(conn, fusewire.clone()),
+            fusewire,
             local_addr,
             remote_addr,
             http_scheme: Scheme::HTTPS,

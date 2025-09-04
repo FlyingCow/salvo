@@ -61,6 +61,7 @@ impl Scalar {
     /// # use salvo_oapi::scalar::Scalar;
     /// let doc = Scalar::new("/openapi.json");
     /// ```
+    #[must_use]
     pub fn new(spec_url: impl Into<Cow<'static, str>>) -> Self {
         Self {
             title: "Scalar".into(),
@@ -74,24 +75,28 @@ impl Scalar {
     }
 
     /// Set title of the html page. The default title is "Scalar".
+    #[must_use]
     pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
         self.title = title.into();
         self
     }
 
     /// Set keywords of the html page.
+    #[must_use]
     pub fn keywords(mut self, keywords: impl Into<Cow<'static, str>>) -> Self {
         self.keywords = Some(keywords.into());
         self
     }
 
     /// Set description of the html page.
+    #[must_use]
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
         self
     }
 
     /// Set the lib url path.
+    #[must_use]
     pub fn lib_url(mut self, lib_url: impl Into<Cow<'static, str>>) -> Self {
         self.lib_url = lib_url.into();
         self
@@ -118,12 +123,12 @@ impl Handler for Scalar {
         let description = self
             .description
             .as_ref()
-            .map(|s| format!("<meta name=\"description\" content=\"{}\">", s))
+            .map(|s| format!("<meta name=\"description\" content=\"{s}\">"))
             .unwrap_or_default();
         let style = self
             .style
             .as_ref()
-            .map(|s| format!("<style>{}</style>", s))
+            .map(|s| format!("<style>{s}</style>"))
             .unwrap_or_default();
         let html = INDEX_TMPL
             .replacen("{{lib_url}}", &self.lib_url, 1)

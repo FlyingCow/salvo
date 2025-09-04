@@ -35,6 +35,7 @@
 //! handler can call [`FlowCtrl::skip_rest()`] method to skip next error handlers and return early.
 
 use std::borrow::Cow;
+use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
@@ -48,7 +49,6 @@ use crate::{Depot, FlowCtrl};
 
 static SUPPORTED_FORMATS: LazyLock<Vec<mime::Name>> =
     LazyLock::new(|| vec![mime::JSON, mime::HTML, mime::XML, mime::PLAIN]);
-const EMPTY_CAUSE_MSG: &str = "There is no more detailed explanation.";
 const SALVO_LINK: &str = r#"<a href="https://salvo.rs" target="_blank">salvo</a>"#;
 
 /// `Catcher` is used to catch errors.
@@ -61,16 +61,21 @@ pub struct Catcher {
 impl Default for Catcher {
     /// Create new `Catcher` with its goal handler is [`DefaultGoal`].
     fn default() -> Self {
-        Catcher {
+        Self {
             goal: Arc::new(DefaultGoal::new()),
             hoops: vec![],
         }
     }
 }
+impl Debug for Catcher {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Catcher").finish()
+    }
+}
 impl Catcher {
     /// Create new `Catcher`.
     pub fn new<H: Handler>(goal: H) -> Self {
-        Catcher {
+        Self {
             goal: Arc::new(goal),
             hoops: vec![],
         }
@@ -78,6 +83,7 @@ impl Catcher {
 
     /// Get current catcher's middlewares reference.
     #[inline]
+    #[must_use]
     pub fn hoops(&self) -> &Vec<Arc<dyn Handler>> {
         &self.hoops
     }
@@ -87,17 +93,19 @@ impl Catcher {
         &mut self.hoops
     }
 
-    /// Add a handler as middleware, it will run the handler when error catched.
+    /// Add a handler as middleware, it will run the handler when error caught.
     #[inline]
+    #[must_use]
     pub fn hoop<H: Handler>(mut self, hoop: H) -> Self {
         self.hoops.push(Arc::new(hoop));
         self
     }
 
-    /// Add a handler as middleware, it will run the handler when error catched.
+    /// Add a handler as middleware, it will run the handler when error caught.
     ///
     /// This middleware is only effective when the filter returns true..
     #[inline]
+    #[must_use]
     pub fn hoop_when<H, F>(mut self, hoop: H, filter: F) -> Self
     where
         H: Handler,
@@ -123,17 +131,19 @@ impl Catcher {
 /// `DefaultGoal` will used to catch them.
 ///
 /// `DefaultGoal` supports sending error pages in `XML`, `JSON`, `HTML`, `Text` formats.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DefaultGoal {
     footer: Option<Cow<'static, str>>,
 }
 impl DefaultGoal {
     /// Create new `DefaultGoal`.
+    #[must_use]
     pub fn new() -> Self {
-        DefaultGoal { footer: None }
+        Self { footer: None }
     }
     /// Create new `DefaultGoal` with custom footer.
     #[inline]
+    #[must_use]
     pub fn with_footer(footer: impl Into<Cow<'static, str>>) -> Self {
         Self::new().footer(footer)
     }
@@ -142,6 +152,7 @@ impl DefaultGoal {
     ///
     /// If footer is `None`, then use default footer.
     /// Default footer is `<a href="https://salvo.rs" target="_blank">salvo</a>`.
+    #[must_use]
     pub fn footer(mut self, footer: impl Into<Cow<'static, str>>) -> Self {
         self.footer = Some(footer.into());
         self
@@ -169,6 +180,7 @@ fn status_error_html(
     code: StatusCode,
     name: &str,
     brief: &str,
+    detail: Option<&str>,
     cause: Option<&str>,
     footer: Option<&str>,
 ) -> String {
@@ -204,19 +216,30 @@ fn status_error_html(
     </style>
 </head>
 <body>
-    <div><h1>{0}: {1}</h1><h3>{2}</h3><pre>{3}</pre><hr><footer>{4}</footer></div>
+    <div><h1>{}: {}</h1><h3>{}</h3>{}{}<hr><footer>{}</footer></div>
 </body>
 </html>"#,
         code.as_u16(),
         name,
         brief,
-        cause.unwrap_or(EMPTY_CAUSE_MSG),
+        detail
+            .map(|detail| format!("<pre>{detail}</pre>"))
+            .unwrap_or_default(),
+        cause
+            .map(|cause| format!("<pre>{cause:#?}</pre>"))
+            .unwrap_or_default(),
         footer.unwrap_or(SALVO_LINK)
     )
 }
 
 #[inline]
-fn status_error_json(code: StatusCode, name: &str, brief: &str, cause: Option<&str>) -> String {
+fn status_error_json(
+    code: StatusCode,
+    name: &str,
+    brief: &str,
+    detail: Option<&str>,
+    cause: Option<&str>,
+) -> String {
     #[derive(Serialize)]
     struct Data<'a> {
         error: Error<'a>,
@@ -226,43 +249,68 @@ fn status_error_json(code: StatusCode, name: &str, brief: &str, cause: Option<&s
         code: u16,
         name: &'a str,
         brief: &'a str,
-        cause: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cause: Option<&'a str>,
     }
     let data = Data {
         error: Error {
             code: code.as_u16(),
             name,
             brief,
-            cause: cause.unwrap_or(EMPTY_CAUSE_MSG),
+            detail,
+            cause,
         },
     };
     serde_json::to_string(&data).unwrap_or_default()
 }
 
-fn status_error_plain(code: StatusCode, name: &str, brief: &str, cause: Option<&str>) -> String {
+fn status_error_plain(
+    code: StatusCode,
+    name: &str,
+    brief: &str,
+    detail: Option<&str>,
+    cause: Option<&str>,
+) -> String {
     format!(
-        "code: {}\n\nname: {}\n\nbrief: {}\n\ncause: {}",
+        "code: {}\n\nname: {}\n\nbrief: {}{}{}",
         code.as_u16(),
         name,
         brief,
-        cause.unwrap_or(EMPTY_CAUSE_MSG)
+        detail
+            .map(|detail| format!("\n\ndetail: {detail}"))
+            .unwrap_or_default(),
+        cause
+            .map(|cause| format!("\n\ncause: {cause:#?}"))
+            .unwrap_or_default(),
     )
 }
 
-fn status_error_xml(code: StatusCode, name: &str, brief: &str, cause: Option<&str>) -> String {
+fn status_error_xml(
+    code: StatusCode,
+    name: &str,
+    brief: &str,
+    detail: Option<&str>,
+    cause: Option<&str>,
+) -> String {
     #[derive(Serialize)]
     struct Data<'a> {
         code: u16,
         name: &'a str,
         brief: &'a str,
-        cause: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cause: Option<&'a str>,
     }
 
     let data = Data {
         code: code.as_u16(),
         name,
         brief,
-        cause: cause.unwrap_or(EMPTY_CAUSE_MSG),
+        detail,
+        cause,
     };
     serde_xml_rs::to_string(&data).unwrap_or_default()
 }
@@ -281,14 +329,25 @@ pub fn status_error_bytes(
         prefer_format.clone()
     };
     #[cfg(debug_assertions)]
-    let cause = err.cause.as_ref().map(|e| format!("{:#?}", e.as_ref()));
+    let cause = err.cause.as_ref().map(|e| format!("{e:#?}"));
     #[cfg(not(debug_assertions))]
-    let cause: Option<String> = None;
+    let cause: Option<&str> = None;
+    #[cfg(debug_assertions)]
+    let detail = err.detail.as_deref();
+    #[cfg(not(debug_assertions))]
+    let detail: Option<&str> = None;
     let content = match format.subtype().as_ref() {
-        "plain" => status_error_plain(err.code, &err.name, &err.brief, cause.as_deref()),
-        "json" => status_error_json(err.code, &err.name, &err.brief, cause.as_deref()),
-        "xml" => status_error_xml(err.code, &err.name, &err.brief, cause.as_deref()),
-        _ => status_error_html(err.code, &err.name, &err.brief, cause.as_deref(), footer),
+        "plain" => status_error_plain(err.code, &err.name, &err.brief, detail, cause.as_deref()),
+        "json" => status_error_json(err.code, &err.name, &err.brief, detail, cause.as_deref()),
+        "xml" => status_error_xml(err.code, &err.name, &err.brief, detail, cause.as_deref()),
+        _ => status_error_html(
+            err.code,
+            &err.name,
+            &err.brief,
+            detail,
+            cause.as_deref(),
+            footer,
+        ),
     };
     (format, Bytes::from(content))
 }
@@ -353,7 +412,7 @@ mod tests {
         let service = Service::new(router);
 
         async fn access(service: &Service, name: &str) -> String {
-            TestClient::get(format!("http://127.0.0.1:5800/{}", name))
+            TestClient::get(format!("http://127.0.0.1:5800/{name}"))
                 .send(service)
                 .await
                 .take_string()
@@ -374,7 +433,7 @@ mod tests {
         let service = Service::new(router).catcher(Catcher::default().hoop(handle404));
 
         async fn access(service: &Service, name: &str) -> String {
-            TestClient::get(format!("http://127.0.0.1:5800/{}", name))
+            TestClient::get(format!("http://127.0.0.1:5800/{name}"))
                 .send(service)
                 .await
                 .take_string()

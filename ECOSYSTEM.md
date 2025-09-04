@@ -8,29 +8,37 @@ If your project isn't listed here and you would like it to be, please feel free 
 - [Websocket](https://gitee.com/hubert22/salvo-websocket): This crate is websocket tool for salvo.
 - [SalvoRsTool](https://github.com/mdddj/SalvoRsTool): salvo Idea RustRover插件 快速生成dto router service模板代码
 - [protect-endpoints](https://github.com/DDtKey/protect-endpoints): Collection of crates to protect your endpoints
-- [salvo-captcha](https://git.4rs.nl/awiteb/salvo-captcha): A captcha middleware for Salvo framework.
+- [salvo-captcha](https://git.4rs.nl/awiteb/salvo-captcha.git): A captcha middleware for Salvo framework.
 - [salvo-casbin](https://github.com/casbin-rs/salvo-casbin): Casbin access control hoop for salvo framework.
 
 ## Project showcase
 
-- [AI00 RWKV Server](https://github.com/Ai00-X/ai00_server): AI00 RWKV Server is an inference API server based on the RWKV model..
+- [AI00 RWKV Server](https://github.com/Ai00-X/ai00_server): AI00 RWKV Server is an inference API server based on the RWKV model.
+- [palpo](https://github.com/palpo-matrix-server/palpo): A Rust Matrix Server Implementation.
+- [dora](https://github.com/dora-rs/dora): Making robotic applications fast and simple!
+- [rmqtt](https://github.com/rmqtt/rmqtt): MQTT Server/MQTT Broker - Scalable Distributed MQTT Message Broker for IoT in the 5G Era.
 - [Salvo Admin](https://github.com/lyqgit/salvo-admin): 基于salvo和Ruoyi-Vue3的rust快速开发框架.
 - [Salvo Admin](https://github.com/feihua/salvo-admin): 基于salvo和rbatis的rbac权限管理系统.
 - [Geospatial Web](https://gitlab.com/geospatialweb/rust-mvt-postgis): Rust REST API - Martin MVT Tile Server - PostGIS.
 - [ALLEY](https://github.com/alley-rs/alley-transfer): Software for fast file transfer between terminals in the same network segment.
 - [musicbot](https://github.com/AdrienPensart/musicbot): Music swiss army knife.
 - [Replex](https://github.com/lostb1t/replex): Remix your Plex recommendations.
-- [Pure Rust Instant Message(PRIM)](https://github.com/SuanCaiYv/prim): 使用纯Rust实现的即时通讯系统.
+- [Pure Rust Instant Message(PRIM)](https://github.com/SuanCaiYv/prim): 使用纯Rust实现的即时通讯系统. 
 - [rblog](https://github.com/prabirshrestha/rblog): Blog engine written in rust.
 - [myblog](https://github.com/driftluo/myblog): This is my personal blog.
 - [opensound](https://github.com/opensound-org/opensound): Pro-Audio system engine, using `salvo` as the default HTTP server backend（专业音频系统引擎，使用`salvo`作为默认HTTP服务器后端）.
 - [static-api](https://github.com/josejachuf/static-api-rs): This is a simple application emulating a basic REST API.
-- [palpo](https://github.com/palpo-matrix-server/palpo): A Rust Matrix Server Implementation.
 - [yiirs](https://github.com/shenghui0779/yiirs): Rust API 快速开发脚手架 (Salvo & Axum).
 - [luxy](https://github.com/alley-rs/fluxy): Software for fast file transfer between terminals in the same network segment.
 - [ffxiv-best-craft](https://github.com/Tnze/ffxiv-best-craft): A crafting simulator and solver for FF14 with friendly GUI.
 - [System-Monitor-Server](https://github.com/SimonYen/System-Monitor-Server): A server monitoring program written in Rust.
 - [mvt server](https://github.com/mvt-proj/mvt-rs) - A simple and high-speed vector tile server (and more) developed in Rust, using the Salvo web framework.
+- [ddddocr](https://github.com/86maid/ddddocr) - A simple OCR API server, very easy to deploy.
+- [tosu lyrics](https://github.com/HollisMeynell/tosu-lyrics) - tosu 歌词显示器.
+- [NetLink](https://github.com/rustp2p/NetLink) - NetLink is a decentralized networking tool built on the [rustp2p] library.
+- [poe2openai](https://github.com/jeromeleong/poe2openai) - Convert Poe API into OpenAI format API.
+- [ssr-rs](https://github.com/Valerioageno/ssr-rs) - Server side rendering on rust servers using the v8 engine for parse and evaluate the javascript code.
+- [chia gaming](https://github.com/Chia-Network/chia-gaming) - chia-gaming Traits and Structs.
 
 ## Tutorials
 - [Rust Salvo零基础教程](https://www.bilibili.com/video/BV1FS421N71D/): Rust Salvo零基础入门教程.

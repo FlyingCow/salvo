@@ -21,7 +21,7 @@ cfg_feature! {
     pub use cookie_store::CookieStore;
 
     /// Helper function to create a `CookieStore`.
-    pub fn cookie_store() -> CookieStore {
+    #[must_use] pub fn cookie_store() -> CookieStore {
         CookieStore::new()
     }
 }
@@ -33,6 +33,7 @@ cfg_feature! {
     pub use session_store::SessionStore;
 
     /// Helper function to create a `SessionStore`.
+    #[must_use]
     pub fn session_store() -> SessionStore {
         SessionStore::new()
     }
@@ -66,7 +67,7 @@ impl Flash {
         self.0.push(FlashMessage::success(message));
         self
     }
-    /// Add a new message with level `Waring`.
+    /// Add a new message with level `Warning`.
     #[inline]
     pub fn warning(&mut self, message: impl Into<String>) -> &mut Self {
         self.0.push(FlashMessage::warning(message));
@@ -156,13 +157,14 @@ pub enum FlashLevel {
 }
 impl FlashLevel {
     /// Convert a `FlashLevel` to a `&str`.
+    #[must_use]
     pub fn to_str(&self) -> &'static str {
         match self {
-            FlashLevel::Debug => "debug",
-            FlashLevel::Info => "info",
-            FlashLevel::Success => "success",
-            FlashLevel::Warning => "warning",
-            FlashLevel::Error => "error",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Error => "error",
         }
     }
 }
@@ -329,35 +331,35 @@ mod tests {
     #[cfg(feature = "cookie-store")]
     #[tokio::test]
     async fn test_cookie_store() {
-        let cookie_name = "my-custom-cookie-name".to_string();
+        let cookie_name = "my-custom-cookie-name".to_owned();
         let router = Router::new()
             .hoop(CookieStore::new().name(&cookie_name).into_handler())
             .push(Router::with_path("get").get(get_flash))
             .push(Router::with_path("set").get(set_flash));
         let service = Service::new(router);
 
-        let respone = TestClient::get("http://127.0.0.1:5800/set")
+        let response = TestClient::get("http://127.0.0.1:5800/set")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::SEE_OTHER));
+        assert_eq!(response.status_code, Some(StatusCode::SEE_OTHER));
 
-        let cookie = respone.headers().get(SET_COOKIE).unwrap();
+        let cookie = response.headers().get(SET_COOKIE).unwrap();
         assert!(cookie.to_str().unwrap().contains(&cookie_name));
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/get")
+        let mut response = TestClient::get("http://127.0.0.1:5800/get")
             .add_header(COOKIE, cookie, true)
             .send(&service)
             .await;
-        assert!(respone.take_string().await.unwrap().contains("Hey there!"));
+        assert!(response.take_string().await.unwrap().contains("Hey there!"));
 
-        let cookie = respone.headers().get(SET_COOKIE).unwrap();
+        let cookie = response.headers().get(SET_COOKIE).unwrap();
         assert!(cookie.to_str().unwrap().contains(&cookie_name));
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/get")
+        let mut response = TestClient::get("http://127.0.0.1:5800/get")
             .add_header(COOKIE, cookie, true)
             .send(&service)
             .await;
-        assert!(respone.take_string().await.unwrap().is_empty());
+        assert!(response.take_string().await.unwrap().is_empty());
     }
 
     #[cfg(feature = "session-store")]
@@ -378,23 +380,23 @@ mod tests {
             .push(Router::with_path("set").get(set_flash));
         let service = Service::new(router);
 
-        let respone = TestClient::get("http://127.0.0.1:5800/set")
+        let response = TestClient::get("http://127.0.0.1:5800/set")
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::SEE_OTHER));
+        assert_eq!(response.status_code, Some(StatusCode::SEE_OTHER));
 
-        let cookie = respone.headers().get(SET_COOKIE).unwrap();
+        let cookie = response.headers().get(SET_COOKIE).unwrap();
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/get")
+        let mut response = TestClient::get("http://127.0.0.1:5800/get")
             .add_header(COOKIE, cookie, true)
             .send(&service)
             .await;
-        assert!(respone.take_string().await.unwrap().contains("Hey there!"));
+        assert!(response.take_string().await.unwrap().contains("Hey there!"));
 
-        let mut respone = TestClient::get("http://127.0.0.1:5800/get")
+        let mut response = TestClient::get("http://127.0.0.1:5800/get")
             .add_header(COOKIE, cookie, true)
             .send(&service)
             .await;
-        assert!(respone.take_string().await.unwrap().is_empty());
+        assert!(response.take_string().await.unwrap().is_empty());
     }
 }

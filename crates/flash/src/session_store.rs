@@ -18,6 +18,7 @@ impl Default for SessionStore {
 
 impl SessionStore {
     /// Create a new `SessionStore`.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             name: "salvo.flash".into(),
@@ -25,13 +26,15 @@ impl SessionStore {
     }
 
     /// Sets session key name.
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
     }
 
     /// Converts into `FlashHandler`.
-    pub fn into_handler(self) -> FlashHandler<SessionStore> {
+    #[must_use]
+    pub fn into_handler(self) -> FlashHandler<Self> {
         FlashHandler::new(self)
     }
 }

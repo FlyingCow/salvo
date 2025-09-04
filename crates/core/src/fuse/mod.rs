@@ -20,10 +20,12 @@ pub enum TransProto {
 }
 impl TransProto {
     /// Check if the transport protocol is tcp.
+    #[must_use]
     pub fn is_tcp(&self) -> bool {
         matches!(self, Self::Tcp)
     }
     /// Check if the transport protocol is quic.
+    #[must_use]
     pub fn is_quic(&self) -> bool {
         matches!(self, Self::Quic)
     }
@@ -70,7 +72,7 @@ pub trait FuseFactory {
 /// A fusewire.
 #[async_trait]
 pub trait Fusewire {
-    /// Recive a event report.
+    /// Receive a event report.
     fn event(&self, event: FuseEvent);
     /// Check if the fusewire is fused.
     async fn fused(&self);

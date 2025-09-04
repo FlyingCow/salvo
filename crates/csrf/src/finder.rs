@@ -95,7 +95,7 @@ mod tests {
             .add_header("x-csrf-token", "test_token", true)
             .build();
         let token = header_finder.find_token(&mut req).await;
-        assert_eq!(token, Some("test_token".to_string()));
+        assert_eq!(token, Some("test_token".to_owned()));
     }
 
     #[tokio::test]
@@ -105,7 +105,7 @@ mod tests {
             .raw_form("csrf-token=test_token")
             .build();
         let token = form_finder.find_token(&mut req).await;
-        assert_eq!(token, Some("test_token".to_string()));
+        assert_eq!(token, Some("test_token".to_owned()));
     }
 
     #[tokio::test]
@@ -115,6 +115,16 @@ mod tests {
             .raw_json(r#"{"csrf-token":"test_token"}"#)
             .build();
         let token = json_finder.find_token(&mut req).await;
-        assert_eq!(token, Some("test_token".to_string()));
+        assert_eq!(token, Some("test_token".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn test_json_finder_not_string() {
+        let json_finder = JsonFinder::new("csrf-token");
+        let mut req = TestClient::get("http://test.com")
+            .raw_json(r#"{"csrf-token":123}"#)
+            .build();
+        let token = json_finder.find_token(&mut req).await;
+        assert_eq!(token, None);
     }
 }

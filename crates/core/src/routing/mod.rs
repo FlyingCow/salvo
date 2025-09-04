@@ -7,7 +7,7 @@
 //! The interior of [`Router`] is actually composed of a series of filters. When a request comes, the route will
 //! test itself and its descendants in order to see if they can match the request in the order they were added, and
 //! then execute the middleware on the entire chain formed by the route and its descendants in sequence. If the
-//! status of [`Response`] is set to error (4XX, 5XX) or jump (3XX) during processing, the subsequent middleware and
+//! status of [`Response`](crate::http::Response) is set to error (4XX, 5XX) or jump (3XX) during processing, the subsequent middleware and
 //! [`Handler`] will be skipped. You can also manually adjust `ctrl.skip_rest()` to skip subsequent middleware and
 //! [`Handler`].
 //!
@@ -188,7 +188,7 @@
 //! In this example, the root router has a middleware to check current user is authenticated. This middleware will
 //! affect the root router and its descendants.
 //!
-//! If we don't want to check user is authed when current user view writer informations and articles. We can write
+//! If we don't want to check user is authed when current user view writer information and articles. We can write
 //! router like this:
 //!
 //! ```rust
@@ -381,6 +381,7 @@ pub use path_state::PathState;
 mod flow_ctrl;
 pub use flow_ctrl::FlowCtrl;
 
+use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use crate::Handler;
@@ -389,6 +390,14 @@ use crate::Handler;
 pub struct DetectMatched {
     pub hoops: Vec<Arc<dyn Handler>>,
     pub goal: Arc<dyn Handler>,
+}
+
+impl Debug for DetectMatched {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DetectMatched")
+            .field("hoops.len", &self.hoops.len())
+            .finish()
+    }
 }
 
 pub(crate) fn split_wild_name(name: &str) -> (&str, &str) {
@@ -429,7 +438,7 @@ mod tests {
         let service = Service::new(router);
 
         async fn access(service: &Service, host: &str) -> String {
-            TestClient::get(format!("http://{}/", host))
+            TestClient::get(format!("http://{host}/"))
                 .send(service)
                 .await
                 .take_string()
@@ -497,7 +506,7 @@ mod tests {
         let service = Service::new(router);
 
         async fn access(service: &Service, path: &str) {
-            TestClient::get(format!("http://127.0.0.1/{}", path))
+            TestClient::get(format!("http://127.0.0.1/{path}"))
                 .send(service)
                 .await;
         }

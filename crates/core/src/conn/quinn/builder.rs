@@ -1,25 +1,30 @@
-//! HTTP3 suppports.
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+//! HTTP3 supports.
+use std::fmt::{self, Debug, Formatter};
+use std::io::{Error as IoError, Result as IoResult};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use bytes::Bytes;
-use futures_util::future::poll_fn;
 use futures_util::Stream;
-use salvo_http3::error::ErrorLevel;
+use futures_util::future::poll_fn;
 use salvo_http3::ext::Protocol;
 use salvo_http3::server::RequestStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::fuse::ArcFusewire;
+use crate::http::Method;
 use crate::http::body::{H3ReqBody, ReqBody};
-use crate::http::{HttpConnection, Method};
 use crate::proto::WebTransportSession;
 
 /// Builder is used to serve HTTP3 connection.
 pub struct Builder(salvo_http3::server::Builder);
+impl Debug for Builder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Builder").finish()
+    }
+}
 impl Deref for Builder {
     type Target = salvo_http3::server::Builder;
     fn deref(&self) -> &Self::Target {
@@ -38,11 +43,12 @@ impl Default for Builder {
 }
 impl Builder {
     /// Create a new builder.
+    #[must_use]
     pub fn new() -> Self {
         let mut builder = salvo_http3::server::builder();
         builder
             .enable_webtransport(true)
-            .enable_connect(true)
+            .enable_extended_connect(true)
             .enable_datagram(true)
             .max_webtransport_sessions(1)
             .send_grease(true);
@@ -54,28 +60,42 @@ impl Builder {
     /// Serve HTTP3 connection.
     pub async fn serve_connection(
         &self,
-        conn: crate::conn::quinn::H3Connection,
+        conn: crate::conn::quinn::QuinnConnection,
         hyper_handler: crate::service::HyperHandler,
         graceful_stop_token: Option<CancellationToken>,
     ) -> IoResult<()> {
-        let fusewire = conn.fusewire();
+        let fusewire = hyper_handler.fusewire.clone();
         let mut conn = self
             .0
-            .build::<salvo_http3::http3_quinn::Connection, bytes::Bytes>(conn.into_inner())
+            .build::<salvo_http3::quinn::Connection, bytes::Bytes>(conn.into_inner())
             .await
-            .map_err(|e| IoError::new(ErrorKind::Other, format!("invalid connection: {}", e)))?;
+            .map_err(|e| IoError::other(format!("invalid connection: {e}")))?;
 
         loop {
             match conn.accept().await {
-                Ok(Some((request, stream))) => {
-                    tracing::debug!("new request: {:#?}", request);
+                Ok(Some(resolver)) => {
                     let hyper_handler = hyper_handler.clone();
+                    let (request, stream) = match resolver.resolve_request().await {
+                        Ok(request) => request,
+                        Err(err) => {
+                            tracing::error!("error resolving request: {err:?}");
+                            continue;
+                        }
+                    };
+                    tracing::debug!("new request: {:#?}", request);
                     match request.method() {
                         &Method::CONNECT
-                            if request.extensions().get::<Protocol>() == Some(&Protocol::WEB_TRANSPORT) =>
+                            if request.extensions().get::<Protocol>()
+                                == Some(&Protocol::WEB_TRANSPORT) =>
                         {
-                            if let Some(c) =
-                                process_web_transport(conn, request, stream, hyper_handler, fusewire.clone()).await?
+                            if let Some(c) = process_web_transport(
+                                conn,
+                                request,
+                                stream,
+                                hyper_handler,
+                                fusewire.clone(),
+                            )
+                            .await?
                             {
                                 conn = c;
                             } else {
@@ -85,7 +105,9 @@ impl Builder {
                         _ => {
                             let fusewire = fusewire.clone();
                             tokio::spawn(async move {
-                                match process_request(request, stream, hyper_handler, fusewire).await {
+                                match process_request(request, stream, hyper_handler, fusewire)
+                                    .await
+                                {
                                     Ok(_) => {}
                                     Err(e) => {
                                         tracing::error!(error = ?e, "process request failed")
@@ -99,11 +121,10 @@ impl Builder {
                     break;
                 }
                 Err(e) => {
-                    tracing::debug!(error = ?e, "accept stopped {:?}", e.get_error_level());
-                    match e.get_error_level() {
-                        ErrorLevel::ConnectionError => break,
-                        ErrorLevel::StreamError => continue,
+                    if !e.is_h3_no_error() {
+                        tracing::error!("Connection errored with {}", e);
                     }
+                    break;
                 }
             }
             if let Some(graceful_stop_token) = &graceful_stop_token {
@@ -117,12 +138,12 @@ impl Builder {
 }
 
 async fn process_web_transport(
-    conn: salvo_http3::server::Connection<salvo_http3::http3_quinn::Connection, Bytes>,
+    conn: salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>,
     request: hyper::Request<()>,
-    stream: RequestStream<salvo_http3::http3_quinn::BidiStream<Bytes>, Bytes>,
+    stream: RequestStream<salvo_http3::quinn::BidiStream<Bytes>, Bytes>,
     hyper_handler: crate::service::HyperHandler,
     _fusewire: Option<ArcFusewire>,
-) -> IoResult<Option<salvo_http3::server::Connection<salvo_http3::http3_quinn::Connection, Bytes>>> {
+) -> IoResult<Option<salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>>> {
     let (parts, _body) = request.into_parts();
     let mut request = hyper::Request::from_parts(parts, ReqBody::None);
     request.extensions_mut().insert(Arc::new(Mutex::new(conn)));
@@ -130,35 +151,41 @@ async fn process_web_transport(
 
     let mut response = hyper::service::Service::call(&hyper_handler, request)
         .await
-        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to call hyper service : {}", e)))?;
+        .map_err(|e| IoError::other(format!("failed to call hyper service : {e}")))?;
 
     let conn;
     let stream;
     if let Some(session) = response
         .extensions_mut()
-        .remove::<WebTransportSession<salvo_http3::http3_quinn::Connection, Bytes>>()
+        .remove::<WebTransportSession<salvo_http3::quinn::Connection, Bytes>>()
     {
         let (server_conn, connect_stream) = session.split();
 
         conn = Some(
             server_conn
                 .into_inner()
-                .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to get conn : {}", e)))?,
+                .map_err(|e| IoError::other(format!("failed to get conn : {e}")))?,
         );
         stream = Some(connect_stream);
     } else {
         conn = response
             .extensions_mut()
-            .remove::<Arc<Mutex<salvo_http3::server::Connection<salvo_http3::http3_quinn::Connection, Bytes>>>>()
+            .remove::<Arc<Mutex<salvo_http3::server::Connection<salvo_http3::quinn::Connection, Bytes>>>>()
             .map(|c| {
                 Arc::into_inner(c).expect("http3 connection must exist").into_inner()
-                    .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to get conn : {}", e)))
+                    .map_err(|e| IoError::other( format!("failed to get conn : {e}")))
             })
             .transpose()?;
-        stream = response
-            .extensions_mut()
-            .remove::<Arc<salvo_http3::server::RequestStream<salvo_http3::http3_quinn::BidiStream<Bytes>, Bytes>>>()
-            .and_then(Arc::into_inner);
+        stream =
+            response
+                .extensions_mut()
+                .remove::<Arc<
+                    salvo_http3::server::RequestStream<
+                        salvo_http3::quinn::BidiStream<Bytes>,
+                        Bytes,
+                    >,
+                >>()
+                .and_then(Arc::into_inner);
     }
 
     let Some(conn) = conn else {
@@ -184,10 +211,16 @@ async fn process_web_transport(
         match result {
             Ok(frame) => {
                 if frame.is_data() {
-                    if let Err(e) = stream.send_data(frame.into_data().unwrap_or_default()).await {
+                    if let Err(e) = stream
+                        .send_data(frame.into_data().unwrap_or_default())
+                        .await
+                    {
                         tracing::error!(error = ?e, "unable to send data to connection peer");
                     }
-                } else if let Err(e) = stream.send_trailers(frame.into_trailers().unwrap_or_default()).await {
+                } else if let Err(e) = stream
+                    .send_trailers(frame.into_trailers().unwrap_or_default())
+                    .await
+                {
                     tracing::error!(error = ?e, "unable to send trailers to connection peer");
                 }
             }
@@ -199,7 +232,7 @@ async fn process_web_transport(
     stream
         .finish()
         .await
-        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to finish stream : {}", e)))?;
+        .map_err(|e| IoError::other(format!("failed to finish stream : {e}")))?;
 
     Ok(Some(conn))
 }
@@ -221,7 +254,7 @@ where
 
     let response = hyper::service::Service::call(&hyper_handler, request)
         .await
-        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to call hyper service : {}", e)))?;
+        .map_err(|e| IoError::other(format!("failed to call hyper service : {e}")))?;
 
     let (parts, mut body) = response.into_parts();
     let empty_res = http::Response::from_parts(parts, ());
@@ -242,7 +275,10 @@ where
                     if let Err(e) = tx.send_data(frame.into_data().unwrap_or_default()).await {
                         tracing::error!(error = ?e, "unable to send data to connection peer");
                     }
-                } else if let Err(e) = tx.send_trailers(frame.into_trailers().unwrap_or_default()).await {
+                } else if let Err(e) = tx
+                    .send_trailers(frame.into_trailers().unwrap_or_default())
+                    .await
+                {
                     tracing::error!(error = ?e, "unable to send trailers to connection peer");
                 }
             }
@@ -253,5 +289,5 @@ where
     }
     tx.finish()
         .await
-        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to finish stream : {}", e)))
+        .map_err(|e| IoError::other(format!("failed to finish stream : {e}")))
 }

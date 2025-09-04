@@ -7,8 +7,8 @@
 //! # Example
 //!
 //! In this example, requests to different hosts are proxied to different upstream servers:
-//! - Requests to http://127.0.0.1:5800/ are proxied to https://www.rust-lang.org
-//! - Requests to http://localhost:5800/ are proxied to https://crates.io
+//! - Requests to <http://127.0.0.1:5800/> are proxied to <https://www.rust-lang.org>
+//! - Requests to <http://localhost:5800/> are proxied to <https://crates.io>
 //!
 //! ```no_run
 //! use salvo_core::prelude::*;
@@ -40,6 +40,7 @@
 
 use std::convert::Infallible;
 use std::error::Error as StdError;
+use std::fmt::{self, Debug, Formatter};
 
 use hyper::upgrade::OnUpgrade;
 use percent_encoding::{CONTROLS, utf8_percent_encode};
@@ -60,6 +61,14 @@ cfg_feature! {
     #![feature = "reqwest-client"]
     mod reqwest_client;
     pub use reqwest_client::*;
+}
+
+cfg_feature! {
+    #![feature = "unix-sock-client"]
+    #[cfg(unix)]
+    mod unix_sock_client;
+    #[cfg(unix)]
+    pub use unix_sock_client::*;
 }
 
 type HyperRequest = hyper::Request<ReqBody>;
@@ -173,6 +182,16 @@ where
     pub url_query_getter: UrlPartGetter,
 }
 
+impl<U, C> Debug for Proxy<U, C>
+where
+    U: Upstreams,
+    C: Client,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Proxy").finish()
+    }
+}
+
 impl<U, C> Proxy<U, C>
 where
     U: Upstreams,
@@ -180,8 +199,9 @@ where
     C: Client,
 {
     /// Create new `Proxy` with upstreams list.
+    #[must_use]
     pub fn new(upstreams: U, client: C) -> Self {
-        Proxy {
+        Self {
             upstreams,
             client,
             url_path_getter: Box::new(default_url_path_getter),
@@ -191,6 +211,7 @@ where
 
     /// Set url path getter.
     #[inline]
+    #[must_use]
     pub fn url_path_getter<G>(mut self, url_path_getter: G) -> Self
     where
         G: Fn(&Request, &Depot) -> Option<String> + Send + Sync + 'static,
@@ -201,6 +222,7 @@ where
 
     /// Set url query getter.
     #[inline]
+    #[must_use]
     pub fn url_query_getter<G>(mut self, url_query_getter: G) -> Self
     where
         G: Fn(&Request, &Depot) -> Option<String> + Send + Sync + 'static,
@@ -246,9 +268,9 @@ where
         let query = (self.url_query_getter)(req, depot);
         let rest = if let Some(query) = query {
             if query.starts_with('?') {
-                format!("{}{}", path, query)
+                format!("{path}{query}")
             } else {
-                format!("{}?{}", path, query)
+                format!("{path}?{query}")
             }
         } else {
             path
@@ -256,11 +278,11 @@ where
         let forward_url = if upstream.ends_with('/') && rest.starts_with('/') {
             format!("{}{}", upstream.trim_end_matches('/'), rest)
         } else if upstream.ends_with('/') || rest.starts_with('/') {
-            format!("{}{}", upstream, rest)
+            format!("{upstream}{rest}")
         } else if rest.is_empty() {
-            upstream.to_string()
+            upstream.to_owned()
         } else {
-            format!("{}/{}", upstream, rest)
+            format!("{upstream}/{rest}")
         };
         let forward_url: Uri = TryFrom::try_from(forward_url).map_err(Error::other)?;
         let mut build = hyper::Request::builder()

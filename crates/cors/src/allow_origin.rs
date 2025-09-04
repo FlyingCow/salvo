@@ -1,4 +1,5 @@
 use std::fmt::{self, Debug, Formatter};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use salvo_core::http::header::{self, HeaderName, HeaderValue};
@@ -16,8 +17,6 @@ use super::{Any, WILDCARD};
 #[must_use]
 pub struct AllowOrigin(OriginInner);
 
-type JudgeFn =
-    Arc<dyn for<'a> Fn(&'a HeaderValue, &'a Request, &'a Depot) -> bool + Send + Sync + 'static>;
 impl AllowOrigin {
     /// Allow any origin by sending a wildcard (`*`)
     ///
@@ -51,7 +50,7 @@ impl AllowOrigin {
         I: IntoIterator<Item = HeaderValue>,
     {
         let origins = origins.into_iter().collect::<Vec<_>>();
-        if origins.iter().any(|o| o == WILDCARD) {
+        if origins.contains(&WILDCARD) {
             panic!(
                 "Wildcard origin (`*`) cannot be passed to `AllowOrigin::list`. Use `AllowOrigin::any()` instead"
             );
@@ -60,16 +59,34 @@ impl AllowOrigin {
         }
     }
 
-    /// Set the allowed origins from a predicate
+    /// Set the allowed origins by a closure
     ///
     /// See [`Cors::allow_origin`] for more details.
     ///
     /// [`Cors::allow_origin`]: super::Cors::allow_origin
-    pub fn judge<F>(f: F) -> Self
+    pub fn dynamic<C>(c: C) -> Self
     where
-        F: Fn(&HeaderValue, &Request, &Depot) -> bool + Send + Sync + 'static,
+        C: Fn(Option<&HeaderValue>, &Request, &Depot) -> Option<HeaderValue>
+            + Send
+            + Sync
+            + 'static,
     {
-        Self(OriginInner::Judge(Arc::new(f)))
+        Self(OriginInner::Dynamic(Arc::new(c)))
+    }
+
+    /// Set the allowed origins by a async closure
+    ///
+    /// See [`Cors::allow_origin`] for more details.
+    ///
+    /// [`Cors::allow_origin`]: super::Cors::allow_origin
+    pub fn dynamic_async<C, Fut>(c: C) -> Self
+    where
+        C: Fn(Option<&HeaderValue>, &Request, &Depot) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<HeaderValue>> + Send + 'static,
+    {
+        Self(OriginInner::DynamicAsync(Arc::new(
+            move |header, req, depot| Box::pin(c(header, req, depot)),
+        )))
     }
 
     /// Allow any origin, by mirroring the request origin.
@@ -78,14 +95,14 @@ impl AllowOrigin {
     ///
     /// [`Cors::allow_origin`]: super::Cors::allow_origin
     pub fn mirror_request() -> Self {
-        Self::judge(|_, _, _| true)
+        Self::dynamic(|v, _, _| v.cloned())
     }
 
     pub(super) fn is_wildcard(&self) -> bool {
         matches!(&self.0, OriginInner::Exact(v) if v == WILDCARD)
     }
 
-    pub(super) fn to_header(
+    pub(super) async fn to_header(
         &self,
         origin: Option<&HeaderValue>,
         req: &Request,
@@ -94,7 +111,8 @@ impl AllowOrigin {
         let allow_origin = match &self.0 {
             OriginInner::Exact(v) => v.clone(),
             OriginInner::List(l) => origin.filter(|o| l.contains(o))?.clone(),
-            OriginInner::Judge(c) => origin.filter(|origin| c(origin, req, depot))?.clone(),
+            OriginInner::Dynamic(c) => c(origin, req, depot)?,
+            OriginInner::DynamicAsync(c) => c(origin, req, depot).await?,
         };
 
         Some((header::ACCESS_CONTROL_ALLOW_ORIGIN, allow_origin))
@@ -106,7 +124,8 @@ impl Debug for AllowOrigin {
         match &self.0 {
             OriginInner::Exact(inner) => f.debug_tuple("Exact").field(inner).finish(),
             OriginInner::List(inner) => f.debug_tuple("List").field(inner).finish(),
-            OriginInner::Judge(_) => f.debug_tuple("Judge").finish(),
+            OriginInner::Dynamic(_) => f.debug_tuple("Dynamic").finish(),
+            OriginInner::DynamicAsync(_) => f.debug_tuple("DynamicAsync").finish(),
         }
     }
 }
@@ -179,11 +198,51 @@ impl From<&Vec<String>> for AllowOrigin {
 enum OriginInner {
     Exact(HeaderValue),
     List(Vec<HeaderValue>),
-    Judge(JudgeFn),
+    Dynamic(
+        Arc<dyn Fn(Option<&HeaderValue>, &Request, &Depot) -> Option<HeaderValue> + Send + Sync>,
+    ),
+    DynamicAsync(
+        Arc<
+            dyn Fn(
+                    Option<&HeaderValue>,
+                    &Request,
+                    &Depot,
+                ) -> Pin<Box<dyn Future<Output = Option<HeaderValue>> + Send>>
+                + Send
+                + Sync,
+        >,
+    ),
 }
 
 impl Default for OriginInner {
     fn default() -> Self {
         Self::List(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use salvo_core::http::header::HeaderValue;
+
+    use super::{AllowOrigin, Any, OriginInner, WILDCARD};
+
+    #[test]
+    fn test_from_any() {
+        let origin: AllowOrigin = Any.into();
+        assert!(matches!(origin.0, OriginInner::Exact(ref v) if v == "*"));
+    }
+
+    #[test]
+    fn test_from_list() {
+        let origin: AllowOrigin = vec!["https://example.com"].into();
+        assert!(
+            matches!(origin.0, OriginInner::List(ref v) if v == &vec![HeaderValue::from_static("https://example.com")])
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_list_with_wildcard() {
+        let _: AllowOrigin = vec![WILDCARD.clone()].into();
     }
 }

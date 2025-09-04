@@ -98,7 +98,7 @@
 //!
 //! ## Implement Handler trait directly
 //!
-//! Under certain circumstances, We need to implment `Handler` direclty.
+//! Under certain circumstances, We need to implement `Handler` directly.
 //!
 //! ```
 //! use salvo_core::prelude::*;
@@ -117,6 +117,7 @@
 //!     }
 //! }
 //! ```
+use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use crate::http::StatusCode;
@@ -189,6 +190,13 @@ pub trait Handler: Send + Sync + 'static {
 /// A handler that wraps another [Handler] to enable it to be cloneable.
 #[derive(Clone)]
 pub struct ArcHandler(Arc<dyn Handler>);
+impl Debug for ArcHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArcHandler")
+            .field("inner", &self.0.type_name())
+            .finish()
+    }
+}
 
 #[async_trait]
 impl Handler for ArcHandler {
@@ -204,6 +212,7 @@ impl Handler for ArcHandler {
 }
 
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct EmptyHandler;
 #[async_trait]
 impl Handler for EmptyHandler {
@@ -220,7 +229,8 @@ impl Handler for EmptyHandler {
 
 /// This is a empty implement for `Handler`.
 ///
-/// `EmptyHandler` does nothing except set [`Response`]'s satus as [`StatusCode::OK`], it just marker a router exits.
+/// `EmptyHandler` does nothing except set [`Response`]'s status as [`StatusCode::OK`], it just marker a router exits.
+#[must_use]
 pub fn empty() -> EmptyHandler {
     EmptyHandler
 }
@@ -231,6 +241,16 @@ pub struct WhenHoop<H, F> {
     pub inner: H,
     pub filter: F,
 }
+
+impl<H: Debug, F: Debug> Debug for WhenHoop<H, F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WhenHoop")
+            .field("inner", &self.inner)
+            .field("filter", &self.filter)
+            .finish()
+    }
+}
+
 impl<H, F> WhenHoop<H, F> {
     pub fn new(inner: H, filter: F) -> Self {
         Self { inner, filter }
@@ -251,6 +271,8 @@ where
     ) {
         if (self.filter)(req, depot) {
             self.inner.handle(req, depot, res, ctrl).await;
+        } else {
+            ctrl.call_next(req, depot, res).await;
         }
     }
 }
@@ -271,12 +293,31 @@ where
     }
 }
 
-/// Handler that wrap [`Handler`] to let it use middlwares.
+/// Handler that wrap [`Handler`] to let it use middlewares.
 #[non_exhaustive]
 pub struct HoopedHandler {
     inner: Arc<dyn Handler>,
     hoops: Vec<Arc<dyn Handler>>,
 }
+
+impl Clone for HoopedHandler {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            hoops: self.hoops.clone(),
+        }
+    }
+}
+
+impl Debug for HoopedHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HoopedHandler")
+            .field("inner", &self.inner.type_name())
+            .field("hoops.len", &self.hoops.len())
+            .finish()
+    }
+}
+
 impl HoopedHandler {
     /// Create new `HoopedHandler`.
     pub fn new<H: Handler>(inner: H) -> Self {
@@ -288,6 +329,7 @@ impl HoopedHandler {
 
     /// Get current catcher's middlewares reference.
     #[inline]
+    #[must_use]
     pub fn hoops(&self) -> &Vec<Arc<dyn Handler>> {
         &self.hoops
     }
@@ -297,17 +339,19 @@ impl HoopedHandler {
         &mut self.hoops
     }
 
-    /// Add a handler as middleware, it will run the handler when error catched.
+    /// Add a handler as middleware, it will run the handler when error caught.
     #[inline]
+    #[must_use]
     pub fn hoop<H: Handler>(mut self, hoop: H) -> Self {
         self.hoops.push(Arc::new(hoop));
         self
     }
 
-    /// Add a handler as middleware, it will run the handler when error catched.
+    /// Add a handler as middleware, it will run the handler when error caught.
     ///
     /// This middleware is only effective when the filter returns true..
     #[inline]
+    #[must_use]
     pub fn hoop_when<H, F>(mut self, hoop: H, filter: F) -> Self
     where
         H: Handler,
@@ -389,3 +433,34 @@ macro_rules! skipper_tuple_impls {
 
 crate::for_each_tuple!(handler_tuple_impls);
 crate::for_each_tuple!(skipper_tuple_impls);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Response;
+    use crate::http::StatusCode;
+    use crate::test::{ResponseExt, TestClient};
+    use salvo_macros::handler;
+
+    #[tokio::test]
+    async fn test_empty_handler() {
+        let res = TestClient::get("http://127.0.0.1:5800/")
+            .send(empty())
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+    }
+
+    #[tokio::test]
+    async fn test_arc_handler() {
+        #[handler]
+        async fn hello(res: &mut Response) {
+            res.status_code(StatusCode::OK);
+            res.render("hello");
+        }
+        let mut res = TestClient::get("http://127.0.0.1:5800/")
+            .send(hello.arc())
+            .await;
+        assert_eq!(res.status_code, Some(StatusCode::OK));
+        assert_eq!(res.take_string().await.unwrap(), "hello");
+    }
+}

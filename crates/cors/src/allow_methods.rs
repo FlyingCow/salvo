@@ -1,4 +1,6 @@
 use std::fmt::{self, Debug, Formatter};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use salvo_core::http::Method;
@@ -17,9 +19,6 @@ use super::{Any, WILDCARD, separated_by_commas};
 #[must_use]
 pub struct AllowMethods(AllowMethodsInner);
 
-type JudgeFn = Arc<
-    dyn for<'a> Fn(&'a HeaderValue, &'a Request, &'a Depot) -> HeaderValue + Send + Sync + 'static,
->;
 impl AllowMethods {
     /// Allow any method by sending a wildcard (`*`)
     ///
@@ -35,7 +34,7 @@ impl AllowMethods {
     /// See [`Cors::allow_methods`] for more details.
     ///
     /// [`Cors::allow_methods`]: super::Cors::allow_methods
-    pub fn exact(method: Method) -> Self {
+    pub fn exact(method: &Method) -> Self {
         let value = HeaderValue::from_str(method.as_str()).expect("Invalid method.");
         Self(AllowMethodsInner::Exact(value))
     }
@@ -57,16 +56,35 @@ impl AllowMethods {
             Some(v) => Self(AllowMethodsInner::Exact(v)),
         }
     }
-    /// Allow custom allow methods based on a given predicate
+
+    /// Set allow methods by a closure
     ///
     /// See [`Cors::allow_methods`] for more details.
     ///
     /// [`Cors::allow_methods`]: super::Cors::allow_methods
-    pub fn judge<F>(f: F) -> Self
+    pub fn dynamic<C>(c: C) -> Self
     where
-        F: Fn(&HeaderValue, &Request, &Depot) -> HeaderValue + Send + Sync + 'static,
+        C: Fn(Option<&HeaderValue>, &Request, &Depot) -> Option<HeaderValue>
+            + Send
+            + Sync
+            + 'static,
     {
-        Self(AllowMethodsInner::Judge(Arc::new(f)))
+        Self(AllowMethodsInner::Dynamic(Arc::new(c)))
+    }
+
+    /// Set allow methods by a async closure
+    ///
+    /// See [`Cors::allow_methods`] for more details.
+    ///
+    /// [`Cors::allow_methods`]: super::Cors::allow_methods
+    pub fn dynamic_async<C, Fut>(c: C) -> Self
+    where
+        C: Fn(Option<&HeaderValue>, &Request, &Depot) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<HeaderValue>> + Send + 'static,
+    {
+        Self(AllowMethodsInner::DynamicAsync(Arc::new(
+            move |header, req, depot| Box::pin(c(header, req, depot)),
+        )))
     }
 
     /// Allow any method, by mirroring the preflight [`Access-Control-Request-Method`][mdn]
@@ -85,7 +103,7 @@ impl AllowMethods {
         matches!(&self.0, AllowMethodsInner::Exact(v) if v == WILDCARD)
     }
 
-    pub(super) fn to_header(
+    pub(super) async fn to_header(
         &self,
         origin: Option<&HeaderValue>,
         req: &Request,
@@ -94,11 +112,12 @@ impl AllowMethods {
         let allow_methods = match &self.0 {
             AllowMethodsInner::None => return None,
             AllowMethodsInner::Exact(v) => v.clone(),
-            AllowMethodsInner::Judge(f) => f(origin?, req, depot),
             AllowMethodsInner::MirrorRequest => req
                 .headers()
                 .get(header::ACCESS_CONTROL_REQUEST_METHOD)?
                 .clone(),
+            AllowMethodsInner::Dynamic(c) => c(origin, req, depot)?,
+            AllowMethodsInner::DynamicAsync(c) => c(origin, req, depot).await?,
         };
 
         Some((header::ACCESS_CONTROL_ALLOW_METHODS, allow_methods))
@@ -110,8 +129,9 @@ impl Debug for AllowMethods {
         match &self.0 {
             AllowMethodsInner::None => f.debug_tuple("None").finish(),
             AllowMethodsInner::Exact(inner) => f.debug_tuple("Exact").field(inner).finish(),
-            AllowMethodsInner::Judge(_) => f.debug_tuple("Judge").finish(),
             AllowMethodsInner::MirrorRequest => f.debug_tuple("MirrorRequest").finish(),
+            AllowMethodsInner::Dynamic(_) => f.debug_tuple("Predicate").finish(),
+            AllowMethodsInner::DynamicAsync(_) => f.debug_tuple("DynamicAsync").finish(),
         }
     }
 }
@@ -124,7 +144,7 @@ impl From<Any> for AllowMethods {
 
 impl From<Method> for AllowMethods {
     fn from(method: Method) -> Self {
-        Self::exact(method)
+        Self::exact(&method)
     }
 }
 
@@ -145,6 +165,37 @@ enum AllowMethodsInner {
     #[default]
     None,
     Exact(HeaderValue),
-    Judge(JudgeFn),
     MirrorRequest,
+    Dynamic(
+        Arc<dyn Fn(Option<&HeaderValue>, &Request, &Depot) -> Option<HeaderValue> + Send + Sync>,
+    ),
+    DynamicAsync(
+        Arc<
+            dyn Fn(
+                    Option<&HeaderValue>,
+                    &Request,
+                    &Depot,
+                ) -> Pin<Box<dyn Future<Output = Option<HeaderValue>> + Send>>
+                + Send
+                + Sync,
+        >,
+    ),
+}
+#[cfg(test)]
+mod tests {
+    use salvo_core::http::Method;
+
+    use super::{AllowMethods, AllowMethodsInner, Any};
+
+    #[test]
+    fn test_from_any() {
+        let methods: AllowMethods = Any.into();
+        assert!(matches!(methods.0, AllowMethodsInner::Exact(ref v) if v == "*"));
+    }
+
+    #[test]
+    fn test_from_list() {
+        let methods: AllowMethods = vec![Method::GET, Method::POST].into();
+        assert!(matches!(methods.0, AllowMethodsInner::Exact(ref v) if v == "GET,POST"));
+    }
 }

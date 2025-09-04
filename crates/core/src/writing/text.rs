@@ -109,32 +109,32 @@ impl Scribe for Text<&String> {
 impl<C: Debug> Debug for Text<C> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Text::Plain(content) => f.debug_tuple("Text::Plain").field(content).finish(),
-            Text::Json(content) => f.debug_tuple("Text::Json").field(content).finish(),
-            Text::Xml(content) => f.debug_tuple("Text::Xml").field(content).finish(),
-            Text::Html(content) => f.debug_tuple("Text::Html").field(content).finish(),
-            Text::Js(content) => f.debug_tuple("Text::Js").field(content).finish(),
-            Text::Css(content) => f.debug_tuple("Text::Css").field(content).finish(),
-            Text::Csv(content) => f.debug_tuple("Text::Csv").field(content).finish(),
-            Text::Atom(content) => f.debug_tuple("Text::Atom").field(content).finish(),
-            Text::Rss(content) => f.debug_tuple("Text::Rss").field(content).finish(),
-            Text::Rdf(content) => f.debug_tuple("Text::Rdf").field(content).finish(),
+            Self::Plain(content) => f.debug_tuple("Text::Plain").field(content).finish(),
+            Self::Json(content) => f.debug_tuple("Text::Json").field(content).finish(),
+            Self::Xml(content) => f.debug_tuple("Text::Xml").field(content).finish(),
+            Self::Html(content) => f.debug_tuple("Text::Html").field(content).finish(),
+            Self::Js(content) => f.debug_tuple("Text::Js").field(content).finish(),
+            Self::Css(content) => f.debug_tuple("Text::Css").field(content).finish(),
+            Self::Csv(content) => f.debug_tuple("Text::Csv").field(content).finish(),
+            Self::Atom(content) => f.debug_tuple("Text::Atom").field(content).finish(),
+            Self::Rss(content) => f.debug_tuple("Text::Rss").field(content).finish(),
+            Self::Rdf(content) => f.debug_tuple("Text::Rdf").field(content).finish(),
         }
     }
 }
 impl<C: Display> Display for Text<C> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Text::Plain(content) => Display::fmt(content, f),
-            Text::Json(content) => Display::fmt(content, f),
-            Text::Xml(content) => Display::fmt(content, f),
-            Text::Html(content) => Display::fmt(content, f),
-            Text::Js(content) => Display::fmt(content, f),
-            Text::Css(content) => Display::fmt(content, f),
-            Text::Csv(content) => Display::fmt(content, f),
-            Text::Atom(content) => Display::fmt(content, f),
-            Text::Rss(content) => Display::fmt(content, f),
-            Text::Rdf(content) => Display::fmt(content, f),
+            Self::Plain(content)
+            | Self::Json(content)
+            | Self::Xml(content)
+            | Self::Html(content)
+            | Self::Js(content)
+            | Self::Css(content)
+            | Self::Csv(content)
+            | Self::Atom(content)
+            | Self::Rss(content)
+            | Self::Rdf(content) => Display::fmt(content, f),
         }
     }
 }
@@ -238,6 +238,131 @@ mod tests {
         assert_eq!(
             res.headers().get("content-type").unwrap(),
             "text/html; charset=utf-8"
+        );
+    }
+    #[tokio::test]
+    async fn test_write_xml_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Xml("<xml>hello</xml>")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "<xml>hello</xml>");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "application/xml; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_js_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Js("var a = 1;")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "var a = 1;");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "text/javascript; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_css_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Css("body {color: red;}")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "body {color: red;}");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "text/css; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_csv_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Csv("a,b,c")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "a,b,c");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "text/csv; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_atom_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Atom("<feed></feed>")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "<feed></feed>");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "application/atom+xml; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_rss_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Rss("<rss></rss>")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "<rss></rss>");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "application/rss+xml; charset=utf-8"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_rdf_text() {
+        #[handler]
+        async fn test() -> Text<&'static str> {
+            Text::Rdf("<rdf></rdf>")
+        }
+
+        let router = Router::new().push(Router::with_path("test").get(test));
+        let mut res = TestClient::get("http://127.0.0.1:5800/test")
+            .send(router)
+            .await;
+        assert_eq!(res.take_string().await.unwrap(), "<rdf></rdf>");
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "application/rdf+xml; charset=utf-8"
         );
     }
 }

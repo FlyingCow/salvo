@@ -7,6 +7,7 @@ use salvo_core::http::ResBody;
 use salvo_core::prelude::*;
 
 /// Middleware for metrics with OpenTelemetry.
+#[derive(Debug)]
 pub struct Metrics {
     request_count: Counter<u64>,
     error_count: Counter<u64>,
@@ -21,6 +22,7 @@ impl Default for Metrics {
 
 impl Metrics {
     /// Create `Metrics` middleware with `meter`.
+    #[must_use]
     pub fn new() -> Self {
         let meter = global::meter("salvo");
         Self {
@@ -84,5 +86,39 @@ impl Handler for Metrics {
         self.request_count.add(1, &labels);
         self.duration
             .record(elapsed.as_secs_f64() * 1000.0, &labels);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use salvo_core::prelude::*;
+    use salvo_core::test::{ResponseExt, TestClient};
+
+    use super::*;
+    #[tokio::test]
+    async fn test_metrics_default() {
+        let metrics = Metrics::default();
+        assert_eq!(format!("{:?}", metrics).contains("Metrics"), true);
+    }
+
+    #[handler]
+    async fn hello() -> &'static str {
+        "Hello"
+    }
+
+    #[tokio::test]
+    async fn test_metrics_handle() {
+        let metrics = Metrics::default();
+
+        let router = Router::new().hoop(metrics).goal(hello);
+        let service = Service::new(router);
+
+        let content = TestClient::get("http://127.0.0.1:5800")
+            .send(&service)
+            .await
+            .take_string()
+            .await
+            .unwrap();
+        assert!(content == "Hello");
     }
 }

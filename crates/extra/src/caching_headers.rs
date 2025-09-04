@@ -39,7 +39,7 @@ pub struct ETag {
 
 impl ETag {
     /// constructs a new Etag handler
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::default()
     }
 
@@ -47,7 +47,7 @@ impl ETag {
     /// [`etag::EntityTag`](https://docs.rs/etag/3.0.0/etag/struct.EntityTag.html#comparison)
     /// for further documentation on the differences between strong
     /// and weak etag comparison.
-    pub fn strong(mut self) -> Self {
+    #[must_use] pub fn strong(mut self) -> Self {
         self.strong = true;
         self
     }
@@ -131,7 +131,7 @@ pub struct Modified {
 
 impl Modified {
     /// Constructs a new Modified handler
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self { _private: () }
     }
 }
@@ -166,7 +166,7 @@ pub struct CachingHeaders(Modified, ETag);
 
 impl CachingHeaders {
     /// Constructs a new combination modified and etag handler
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::default()
     }
 }
@@ -195,19 +195,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_affix() {
+    async fn test_caching_headers() {
         let router = Router::with_hoop(CachingHeaders::new()).get(hello);
         let service = Service::new(router);
 
-        let respone = TestClient::get("http://127.0.0.1:5800/").send(&service).await;
-        assert_eq!(respone.status_code, Some(StatusCode::OK));
+        let response = TestClient::get("http://127.0.0.1:5800/")
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
 
-        let etag = respone.headers().get(ETAG).unwrap();
-        let respone = TestClient::get("http://127.0.0.1:5800/")
+        let etag = response.headers().get(ETAG).unwrap();
+        let response = TestClient::get("http://127.0.0.1:5800/")
             .add_header(IF_NONE_MATCH, etag, true)
             .send(&service)
             .await;
-        assert_eq!(respone.status_code, Some(StatusCode::NOT_MODIFIED));
-        assert!(respone.body.is_none());
+        assert_eq!(response.status_code, Some(StatusCode::NOT_MODIFIED));
+        assert!(response.body.is_none());
     }
 }

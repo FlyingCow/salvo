@@ -1,7 +1,7 @@
 //! native_tls module
 use std::fmt::{self, Debug, Formatter};
 use std::fs::File;
-use std::io::{Error as IoError, ErrorKind, Result as IoResult, Read};
+use std::io::{Error as IoError, Result as IoResult, Read};
 use std::path::{Path, PathBuf};
 use std::future::{ready, Ready};
 
@@ -37,8 +37,9 @@ impl Default for NativeTlsConfig {
 impl NativeTlsConfig {
     /// Create new `NativeTlsConfig`
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
-        NativeTlsConfig {
+        Self {
             pkcs12_path: None,
             pkcs12: vec![],
             password: String::new(),
@@ -47,6 +48,7 @@ impl NativeTlsConfig {
 
     /// Sets the pkcs12 via File Path, returns [`std::io::Error`] if the file cannot be opened
     #[inline]
+    #[must_use]
     pub fn pkcs12_path(mut self, path: impl AsRef<Path>) -> Self {
         self.pkcs12_path = Some(path.as_ref().into());
         self
@@ -54,12 +56,14 @@ impl NativeTlsConfig {
 
     /// Sets the pkcs12 via bytes slice
     #[inline]
+    #[must_use]
     pub fn pkcs12(mut self, pkcs12: impl Into<Vec<u8>>) -> Self {
         self.pkcs12 = pkcs12.into();
         self
     }
     /// Sets the password
     #[inline]
+    #[must_use]
     pub fn password(mut self, password: impl Into<String>) -> Self {
         self.password = password.into();
         self
@@ -73,7 +77,7 @@ impl NativeTlsConfig {
                 file.read_to_end(&mut self.pkcs12)?;
             }
         }
-        Identity::from_pkcs12(&self.pkcs12, &self.password).map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))
+        Identity::from_pkcs12(&self.pkcs12, &self.password).map_err(IoError::other)
     }
 }
 
@@ -85,8 +89,8 @@ impl TryInto<Identity> for NativeTlsConfig {
     }
 }
 
-impl IntoConfigStream<NativeTlsConfig> for NativeTlsConfig {
-    type Stream = Once<Ready<NativeTlsConfig>>;
+impl IntoConfigStream<Self> for NativeTlsConfig {
+    type Stream = Once<Ready<Self>>;
 
     fn into_stream(self) -> Self::Stream {
         once(ready(self))

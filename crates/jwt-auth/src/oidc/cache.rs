@@ -31,8 +31,8 @@ pub struct CachePolicy {
 
 impl CachePolicy {
     /// Create a new cache policy from the header value of the Cache-Control header
-    pub fn from_header_val(value: Option<&HeaderValue>) -> Self {
-        // Initalize the default config of polling every second
+    #[must_use] pub fn from_header_val(value: Option<&HeaderValue>) -> Self {
+        // Initialize the default config of polling every second
         let mut config = Self::default();
 
         if let Some(value) = value {
@@ -52,7 +52,7 @@ impl CachePolicy {
                 (split.next(), split.next())
             };
             //Modify the default config based on the values that matter
-            //Any values here would be more permisssive than the default behavior
+            //Any values here would be more permissive than the default behavior
             match (key, val) {
                 (Some("max-age"), Some(val)) => {
                     if let Ok(secs) = val.parse::<u64>() {
@@ -69,7 +69,7 @@ impl CachePolicy {
                         self.stale_if_error = Some(Duration::from_secs(secs));
                     }
                 }
-                _ => continue,
+                _ => {},
             };
         }
     }
@@ -85,7 +85,7 @@ impl Default for CachePolicy {
     }
 }
 
-/// The udpate action of cache.
+/// The update action of cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
     /// We checked the JWKS uri and it was the same as the last time we refreshed it so no action was taken
@@ -109,7 +109,7 @@ pub struct CacheState {
 
 impl CacheState {
     /// Create a new `CacheState`
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             last_update: AtomicU64::new(current_time()),
             is_revalidating: AtomicBool::new(false),
@@ -151,6 +151,7 @@ impl Default for CacheState {
 }
 
 /// Helper Struct for storing
+#[derive(Debug)]
 pub struct JwkSetStore {
     /// The current JWKS
     pub jwks: JwkSet,
@@ -162,7 +163,7 @@ pub struct JwkSetStore {
 
 impl JwkSetStore {
     /// Create a new `JwkSetStore`
-    pub fn new(jwks: JwkSet, cache_policy: CachePolicy, validation: Validation) -> Self {
+    #[must_use] pub fn new(jwks: JwkSet, cache_policy: CachePolicy, validation: Validation) -> Self {
         Self {
             jwks,
             decoding_map: HashMap::new(),
@@ -187,7 +188,7 @@ impl JwkSetStore {
     }
 
     /// Get the DecodingInfo for a given kid
-    pub fn get_key(&self, kid: &str) -> Option<Arc<DecodingInfo>> {
+    #[must_use] pub fn get_key(&self, kid: &str) -> Option<Arc<DecodingInfo>> {
         self.decoding_map.get(kid).cloned()
     }
 
@@ -231,16 +232,62 @@ impl JwkSetStore {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn validate_headers() {
-        let _input = vec![
-            "max-age=604800",
-            "no-cache",
-            "max-age=604800, must-revalidate",
-            "no-store",
-            "public, max-age=604800, immutable",
-            "max-age=604800, stale-while-revalidate=86400",
-            "max-age=604800, stale-if-error=86400",
-        ];
+    fn test_cache_policy_default() {
+        let policy = CachePolicy::default();
+        assert_eq!(policy.max_age, Duration::from_secs(1));
+        assert_eq!(policy.stale_while_revalidate, Some(Duration::from_secs(1)));
+        assert_eq!(policy.stale_if_error, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_cache_policy_from_header_val_max_age() {
+        let header_value = HeaderValue::from_static("max-age=3600");
+        let policy = CachePolicy::from_header_val(Some(&header_value));
+        assert_eq!(policy.max_age, Duration::from_secs(3600));
+        assert_eq!(policy.stale_while_revalidate, Some(Duration::from_secs(1)));
+        assert_eq!(policy.stale_if_error, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_cache_policy_from_header_val_stale_while_revalidate() {
+        let header_value = HeaderValue::from_static("max-age=3600, stale-while-revalidate=60");
+        let policy = CachePolicy::from_header_val(Some(&header_value));
+        assert_eq!(policy.max_age, Duration::from_secs(3600));
+        assert_eq!(policy.stale_while_revalidate, Some(Duration::from_secs(60)));
+        assert_eq!(policy.stale_if_error, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_cache_policy_from_header_val_stale_if_error() {
+        let header_value = HeaderValue::from_static("max-age=3600, stale-if-error=120");
+        let policy = CachePolicy::from_header_val(Some(&header_value));
+        assert_eq!(policy.max_age, Duration::from_secs(3600));
+        assert_eq!(policy.stale_while_revalidate, Some(Duration::from_secs(1)));
+        assert_eq!(policy.stale_if_error, Some(Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn test_cache_policy_from_header_val_all() {
+        let header_value = HeaderValue::from_static("max-age=3600, stale-while-revalidate=60, stale-if-error=120");
+        let policy = CachePolicy::from_header_val(Some(&header_value));
+        assert_eq!(policy.max_age, Duration::from_secs(3600));
+        assert_eq!(policy.stale_while_revalidate, Some(Duration::from_secs(60)));
+        assert_eq!(policy.stale_if_error, Some(Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn test_cache_policy_from_header_val_none() {
+        let policy = CachePolicy::from_header_val(None);
+        assert_eq!(policy, CachePolicy::default());
+    }
+
+    #[test]
+    fn test_cache_policy_from_header_val_invalid() {
+        let header_value = HeaderValue::from_static("invalid-directive");
+        let policy = CachePolicy::from_header_val(Some(&header_value));
+        assert_eq!(policy, CachePolicy::default());
     }
 }

@@ -3,6 +3,7 @@ mod named_file;
 pub use named_file::*;
 
 use std::cmp;
+use std::fmt::{self, Debug, Formatter};
 use std::io::{self, Error as IoError, ErrorKind, Read, Result as IoResult, Seek};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -26,6 +27,16 @@ pub struct ChunkedFile<T> {
     offset: u64,
     state: ChunkedState<T>,
 }
+impl<T> Debug for ChunkedFile<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChunkedFile")
+            .field("total_size", &self.total_size)
+            .field("read_size", &self.read_size)
+            .field("buffer_size", &self.buffer_size)
+            .field("offset", &self.offset)
+            .finish()
+    }
+}
 
 impl<T> Stream for ChunkedFile<T>
 where
@@ -40,9 +51,7 @@ where
 
         match self.state {
             ChunkedState::File(ref mut file) => {
-                let mut file = file
-                    .take()
-                    .expect("`ChunkedReadFile` polled after completion");
+                let mut file = file.take().expect("`ChunkedFile` polled after completion");
                 let max_bytes = cmp::min(
                     self.total_size.saturating_sub(self.read_size),
                     self.buffer_size,
@@ -63,7 +72,7 @@ where
             }
             ChunkedState::Future(ref mut fut) => {
                 let (file, bytes) = ready!(Pin::new(fut).poll(cx))
-                    .map_err(|_| IoError::new(ErrorKind::Other, "BlockingErr"))??;
+                    .map_err(|_| IoError::other("`ChunkedFile` block error"))??;
                 self.state = ChunkedState::File(Some(file));
 
                 self.offset += bytes.len() as u64;
@@ -103,8 +112,8 @@ mod test {
 
         let mut result = BytesMut::with_capacity(SIZE as usize);
 
-        while let Some(Ok(read_chunck)) = chunk.next().await {
-            result.extend_from_slice(&read_chunck)
+        while let Some(Ok(read_chunk)) = chunk.next().await {
+            result.extend_from_slice(&read_chunk)
         }
 
         assert_eq!(mock.into_inner(), result)

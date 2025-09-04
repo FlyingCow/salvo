@@ -1,6 +1,7 @@
 //! native_tls module
 use std::error::Error as StdError;
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+use std::fmt::{self, Debug, Formatter};
+use std::io::{Error as IoError, Result as IoResult};
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
@@ -10,9 +11,9 @@ use http::uri::Scheme;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_native_tls::TlsStream;
 
+use crate::conn::tcp::{DynTcpAcceptor, TcpCoupler, ToDynTcpAcceptor};
 use crate::conn::{Accepted, Acceptor, HandshakeStream, Holding, IntoConfigStream, Listener};
 use crate::fuse::ArcFuseFactory;
-use crate::http::{HttpConnection,};
 
 use super::Identity;
 
@@ -21,6 +22,13 @@ pub struct NativeTlsListener<S, C, T, E> {
     config_stream: S,
     inner: T,
     _phantom: PhantomData<(C, E)>,
+}
+impl<S, C, T: Debug, E> Debug for NativeTlsListener<S, C, T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeTlsListener")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 impl<S, C, T, E> NativeTlsListener<S, C, T, E>
 where
@@ -32,7 +40,7 @@ where
     /// Create a new `NativeTlsListener`.
     #[inline]
     pub fn new(config_stream: S, inner: T) -> Self {
-        NativeTlsListener {
+        Self {
             config_stream,
             inner,
             _phantom: PhantomData,
@@ -44,9 +52,10 @@ impl<S, C, T, E> Listener for NativeTlsListener<S, C, T, E>
 where
     S: IntoConfigStream<C> + Send + 'static,
     C: TryInto<Identity, Error = E> + Send + 'static,
-    T: Listener + Send,
+    T: Listener + Send + 'static,
     T::Acceptor: Send + 'static,
-    E: StdError + Send,
+    <T::Acceptor as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    E: StdError + Send + 'static,
 {
     type Acceptor = NativeTlsAcceptor<BoxStream<'static, C>, C, T::Acceptor, E>;
 
@@ -66,13 +75,23 @@ pub struct NativeTlsAcceptor<S, C, T, E> {
     tls_acceptor: Option<tokio_native_tls::TlsAcceptor>,
     _phantom: PhantomData<(C, E)>,
 }
+impl<S, C, T: Debug, E> Debug for NativeTlsAcceptor<S, C, T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeTlsAcceptor")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
 impl<S, C, T, E> NativeTlsAcceptor<S, C, T, E>
 where
-    T: Acceptor,
-    E: StdError + Send,
+    S: Stream<Item = C> + Send + Unpin + 'static,
+    C: TryInto<Identity, Error = E> + Send + 'static,
+    T: Acceptor + Send + 'static,
+    <T as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send,
+    E: StdError + Send + 'static,
 {
     /// Create a new `NativeTlsAcceptor`.
-    pub fn new(config_stream: S, inner: T) -> NativeTlsAcceptor<S, C, T, E> {
+    pub fn new(config_stream: S, inner: T) -> Self {
         let holdings = inner
             .holdings()
             .iter()
@@ -94,7 +113,7 @@ where
                 }
             })
             .collect();
-        NativeTlsAcceptor {
+        Self {
             config_stream,
             inner,
             holdings,
@@ -107,6 +126,11 @@ where
     pub fn inner(&self) -> &T {
         &self.inner
     }
+
+    /// Convert this `NativeTlsAcceptor` into a boxed `DynTcpAcceptor`.
+    pub fn into_boxed(self) -> Box<dyn DynTcpAcceptor> {
+        Box::new(ToDynTcpAcceptor(self))
+    }
 }
 
 impl<S, C, T, E> Acceptor for NativeTlsAcceptor<S, C, T, E>
@@ -114,10 +138,11 @@ where
     S: Stream<Item = C> + Send + Unpin + 'static,
     C: TryInto<Identity, Error = E> + Send + 'static,
     T: Acceptor + Send + 'static,
-    <T as Acceptor>::Conn: AsyncRead + AsyncWrite + Unpin + Send,
+    <T as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send,
     E: StdError + Send,
 {
-    type Conn = HandshakeStream<TlsStream<T::Conn>>;
+    type Coupler = TcpCoupler<Self::Stream>;
+    type Stream = HandshakeStream<TlsStream<T::Stream>>;
 
     #[inline]
     fn holdings(&self) -> &[Holding] {
@@ -125,7 +150,10 @@ where
     }
 
     #[inline]
-    async fn accept(&mut self, fuse_factory: Option<ArcFuseFactory>) -> IoResult<Accepted<Self::Conn>> {
+    async fn accept(
+        &mut self,
+        fuse_factory: Option<ArcFuseFactory>,
+    ) -> IoResult<Accepted<Self::Coupler, Self::Stream>> {
         let config = {
             let mut config = None;
             while let Poll::Ready(Some(item)) = self
@@ -139,7 +167,7 @@ where
         if let Some(config) = config {
             let identity = config
                 .try_into()
-                .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| IoError::other(e.to_string()))?;
             let tls_acceptor = tokio_native_tls::native_tls::TlsAcceptor::new(identity);
             match tls_acceptor {
                 Ok(tls_acceptor) => {
@@ -156,23 +184,21 @@ where
 
         let tls_acceptor = match &self.tls_acceptor {
             Some(tls_acceptor) => tls_acceptor.clone(),
-            None => return Err(IoError::new(ErrorKind::Other, "native_tls: invalid TLS config")),
+            None => return Err(IoError::other("native_tls: invalid TLS config")),
         };
         let Accepted {
-            conn,
+            coupler: _,
+            stream,
+            fusewire,
             local_addr,
             remote_addr,
             ..
         } = self.inner.accept(fuse_factory.clone()).await?;
-        let fusewire = conn.fusewire();
-        let conn = async move {
-            tls_acceptor
-                .accept(conn)
-                .await
-                .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))
-        };
+        let conn = async move { tls_acceptor.accept(stream).await.map_err(IoError::other) };
         Ok(Accepted {
-            conn: HandshakeStream::new(conn, fusewire),
+            coupler: TcpCoupler::new(),
+            stream: HandshakeStream::new(conn, fusewire.clone()),
+            fusewire,
             local_addr,
             remote_addr,
             http_scheme: Scheme::HTTPS,

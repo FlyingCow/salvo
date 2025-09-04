@@ -1,26 +1,27 @@
+use std::fmt::{self, Debug, Formatter};
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::crypto::ring::sign::any_ecdsa_type;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::server::ServerConfig;
 use tokio_rustls::rustls::sign::CertifiedKey;
 use tokio_rustls::server::TlsStream;
-use tokio_rustls::TlsAcceptor;
 
-use crate::conn::{Accepted, Acceptor, Holding, Listener};
-
-use crate::conn::HandshakeStream;
-use crate::fuse::ArcFuseFactory;
-use crate::http::uri::Scheme;
-use crate::http::{HttpConnection, Version};
 use crate::Router;
+use crate::conn::HandshakeStream;
+use crate::conn::tcp::{DynTcpAcceptor, TcpCoupler, ToDynTcpAcceptor};
+use crate::conn::{Accepted, Acceptor, Holding, Listener};
+use crate::fuse::ArcFuseFactory;
+use crate::http::Version;
+use crate::http::uri::Scheme;
 
 use super::config::{AcmeConfig, AcmeConfigBuilder};
-use super::resolver::{ResolveServerCert, ACME_TLS_ALPN_NAME};
+use super::resolver::{ACME_TLS_ALPN_NAME, ResolveServerCert};
 use super::{AcmeCache, AcmeClient, ChallengeType, Http01Handler, WELL_KNOWN_PATH};
 
 cfg_feature! {
@@ -37,10 +38,24 @@ pub struct AcmeListener<T> {
     check_duration: Duration,
 }
 
+impl<T> Debug for AcmeListener<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AcmeListener")
+            .field("inner", &self.inner)
+            .field("config_builder", &self.config_builder)
+            .field("check_duration", &self.check_duration)
+            .finish()
+    }
+}
+
 impl<T> AcmeListener<T> {
     /// Create `AcmeListener`
     #[inline]
-    pub fn new(inner: T) -> AcmeListener<T> {
+    #[must_use]
+    pub fn new(inner: T) -> Self{
         Self {
             inner,
             config_builder: AcmeConfig::builder(),
@@ -52,6 +67,7 @@ impl<T> AcmeListener<T> {
     ///
     /// Defaults to lets encrypt.
     #[inline]
+    #[must_use]
     pub fn get_directory(self, name: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             config_builder: self.config_builder.directory(name, url),
@@ -61,6 +77,7 @@ impl<T> AcmeListener<T> {
 
     /// Sets domains.
     #[inline]
+    #[must_use]
     pub fn domains(self, domains: impl Into<Vec<String>>) -> Self {
         Self {
             config_builder: self.config_builder.domains(domains),
@@ -69,6 +86,7 @@ impl<T> AcmeListener<T> {
     }
     /// Add a domain.
     #[inline]
+    #[must_use]
     pub fn add_domain(self, domain: impl Into<String>) -> Self {
         Self {
             config_builder: self.config_builder.add_domain(domain),
@@ -78,6 +96,7 @@ impl<T> AcmeListener<T> {
 
     /// Add contact emails for the ACME account.
     #[inline]
+    #[must_use]
     pub fn contacts(self, contacts: impl Into<Vec<String>>) -> Self {
         Self {
             config_builder: self.config_builder.contacts(contacts.into()),
@@ -86,6 +105,7 @@ impl<T> AcmeListener<T> {
     }
     /// Add a contact email for the ACME account.
     #[inline]
+    #[must_use]
     pub fn add_contact(self, contact: impl Into<String>) -> Self {
         Self {
             config_builder: self.config_builder.add_contact(contact.into()),
@@ -94,6 +114,7 @@ impl<T> AcmeListener<T> {
     }
 
     /// Create an handler for HTTP-01 challenge
+    #[must_use]
     pub fn http01_challenge(self, router: &mut Router) -> Self {
         let config_builder = self.config_builder.http01_challenge();
         if let Some(keys_for_http01) = &config_builder.keys_for_http01 {
@@ -102,15 +123,19 @@ impl<T> AcmeListener<T> {
             };
             router.routers.insert(
                 0,
-                Router::with_path(format!("{}/{{token}}", WELL_KNOWN_PATH)).goal(handler),
+                Router::with_path(format!("{WELL_KNOWN_PATH}/{{token}}")).goal(handler),
             );
         } else {
             panic!("`HTTP-01` challenge's key should not be none");
         }
-        Self { config_builder, ..self }
+        Self {
+            config_builder,
+            ..self
+        }
     }
     /// Create an handler for HTTP-01 challenge
     #[inline]
+    #[must_use]
     pub fn tls_alpn01_challenge(self) -> Self {
         Self {
             config_builder: self.config_builder.tls_alpn01_challenge(),
@@ -124,6 +149,7 @@ impl<T> AcmeListener<T> {
     /// the obtained certificate will be stored in memory and will need to be
     /// obtained again when the server is restarted next time.
     #[inline]
+    #[must_use]
     pub fn cache_path(self, path: impl Into<PathBuf>) -> Self {
         Self {
             config_builder: self.config_builder.cache_path(path),
@@ -140,7 +166,9 @@ impl<T> AcmeListener<T> {
             AcmeQuinnListener::new(self, local_addr)
         }
     }
-    async fn build_server_config(acme_config: &AcmeConfig) -> crate::Result<(ServerConfig, Arc<ResolveServerCert>)> {
+    async fn build_server_config(
+        acme_config: &AcmeConfig,
+    ) -> crate::Result<(ServerConfig, Arc<ResolveServerCert>)> {
         let mut cached_key = None;
         let mut cached_certs = None;
         if let Some(cache_path) = &acme_config.cache_path {
@@ -149,7 +177,9 @@ impl<T> AcmeListener<T> {
                 .await?;
             if let Some(key_data) = key_data {
                 tracing::debug!("load private key from cache");
-                if let Some(key) = rustls_pemfile::pkcs8_private_keys(&mut key_data.as_slice()).next() {
+                if let Some(key) =
+                    rustls_pemfile::pkcs8_private_keys(&mut key_data.as_slice()).next()
+                {
                     match key {
                         Ok(key) => {
                             cached_key = Some(key);
@@ -180,11 +210,14 @@ impl<T> AcmeListener<T> {
 
         let cert_resolver = Arc::new(ResolveServerCert::default());
         if let (Some(cached_certs), Some(cached_key)) = (cached_certs, cached_key) {
-            let certs = cached_certs.into_iter().collect::<Vec<CertificateDer<'static>>>();
+            let certs = cached_certs
+                .into_iter()
+                .collect::<Vec<CertificateDer<'static>>>();
             tracing::debug!("using cached tls certificates");
             *cert_resolver.cert.write() = Some(Arc::new(CertifiedKey::new(
                 certs,
-                any_ecdsa_type(&PrivateKeyDer::Pkcs8(cached_key)).expect("parse private key failed"),
+                any_ecdsa_type(&PrivateKeyDer::Pkcs8(cached_key))
+                    .expect("parse private key failed"),
             )));
         }
 
@@ -195,7 +228,9 @@ impl<T> AcmeListener<T> {
         server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         if acme_config.challenge_type == ChallengeType::TlsAlpn01 {
-            server_config.alpn_protocols.push(ACME_TLS_ALPN_NAME.to_vec());
+            server_config
+                .alpn_protocols
+                .push(ACME_TLS_ALPN_NAME.to_vec());
         }
         Ok((server_config, cert_resolver))
     }
@@ -203,8 +238,9 @@ impl<T> AcmeListener<T> {
 
 impl<T> Listener for AcmeListener<T>
 where
-    T: Listener + Send,
+    T: Listener + Send + 'static,
     T::Acceptor: Send + 'static,
+    <T::Acceptor as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     type Acceptor = AcmeAcceptor<T::Acceptor>;
 
@@ -215,8 +251,8 @@ where
             check_duration,
             ..
         } = self;
-        let acme_config = config_builder.build()?;
 
+        let acme_config = config_builder.build()?;
         let (server_config, cert_resolver) = Self::build_server_config(&acme_config).await?;
         let server_config = Arc::new(server_config);
         let tls_acceptor = TlsAcceptor::from(server_config.clone());
@@ -242,6 +278,15 @@ cfg_feature! {
         local_addr: A,
     }
 
+    impl<T:Debug, A:Debug> Debug for AcmeQuinnListener<T, A> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            f.debug_struct("AcmeQuinnListener")
+                .field("acme", &self.acme)
+                .field("local_addr", &self.local_addr)
+                .finish()
+        }
+    }
+
     impl <T, A> AcmeQuinnListener<T, A>
     where
         A: std::net::ToSocketAddrs + Send,
@@ -254,13 +299,14 @@ cfg_feature! {
 
     impl<T, A> Listener for AcmeQuinnListener<T, A>
     where
-        T: Listener + Send,
+        T: Listener + Send + 'static,
         T::Acceptor: Send + Unpin + 'static,
-        A: std::net::ToSocketAddrs + Send,
+        <T::Acceptor as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        A: std::net::ToSocketAddrs + Send + 'static,
     {
         type Acceptor = JoinedAcceptor<AcmeAcceptor<T::Acceptor>, QuinnAcceptor<BoxStream<'static, crate::conn::quinn::ServerConfig>, crate::conn::quinn::ServerConfig, std::convert::Infallible>>;
 
-        async fn try_bind(self) -> crate::Result<Self::Acceptor> {
+        async fn try_bind(self) -> crate::Result<Self::Acceptor>{
             let Self { acme, local_addr } = self;
             let a = acme.try_bind().await?;
 
@@ -269,13 +315,12 @@ cfg_feature! {
             let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(crypto).map_err(crate::Error::other)?;
             let config = crate::conn::quinn::ServerConfig::with_crypto(Arc::new(crypto));
             let b = QuinnListener::new(config, local_addr).try_bind().await?;
-            let holdings = a.holdings().iter().chain(b.holdings().iter()).cloned().collect();
-            Ok(JoinedAcceptor::new(a, b, holdings))
+            Ok(JoinedAcceptor::new(a, b))
         }
     }
 }
 
-/// AcmeAcceptor
+/// Acceptor for ACME.
 pub struct AcmeAcceptor<T> {
     config: Arc<AcmeConfig>,
     server_config: Arc<ServerConfig>,
@@ -283,10 +328,20 @@ pub struct AcmeAcceptor<T> {
     holdings: Vec<Holding>,
     tls_acceptor: tokio_rustls::TlsAcceptor,
 }
+impl<T> Debug for AcmeAcceptor<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AcmeAcceptor")
+            .field("config", &self.config)
+            .field("server_config", &self.server_config)
+            .field("holdings", &self.holdings)
+            .finish()
+    }
+}
 
 impl<T> AcmeAcceptor<T>
 where
-    T: Acceptor + Send,
+    T: Acceptor + Send + 'static,
+    T::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     pub(crate) async fn new(
         config: impl Into<Arc<AcmeConfig>> + Send,
@@ -295,7 +350,7 @@ where
         inner: T,
         tls_acceptor: TlsAcceptor,
         check_duration: Duration,
-    ) -> crate::Result<AcmeAcceptor<T>>
+    ) -> crate::Result<Self>
     where
         T: Send,
     {
@@ -320,7 +375,7 @@ where
             })
             .collect();
 
-        let acceptor = AcmeAcceptor {
+        let acceptor = Self {
             config: config.into(),
             server_config: server_config.into(),
             inner,
@@ -329,12 +384,18 @@ where
         };
         let config = acceptor.config.clone();
         let weak_cert_resolver = Arc::downgrade(&cert_resolver);
-        let mut client =
-            AcmeClient::new(&config.directory_url, config.key_pair.clone(), config.contacts.clone()).await?;
+        let mut client = AcmeClient::new(
+            &config.directory_url,
+            config.key_pair.clone(),
+            config.contacts.clone(),
+        )
+        .await?;
         tokio::spawn(async move {
             while let Some(cert_resolver) = Weak::upgrade(&weak_cert_resolver) {
                 if cert_resolver.will_expired(config.before_expired) {
-                    if let Err(e) = super::issuer::issue_cert(&mut client, &config, &cert_resolver).await {
+                    if let Err(e) =
+                        super::issuer::issue_cert(&mut client, &config, &cert_resolver).await
+                    {
                         tracing::error!(error = ?e, "issue certificate failed");
                     }
                 }
@@ -343,17 +404,25 @@ where
         });
         Ok(acceptor)
     }
+
+    /// Returns the config of this acceptor.
     pub fn server_config(&self) -> Arc<ServerConfig> {
         self.server_config.clone()
     }
+
+    /// Convert this `AcmeAcceptor` into a boxed `DynTcpAcceptor`.
+    pub fn into_boxed(self) -> Box<dyn DynTcpAcceptor> {
+        Box::new(ToDynTcpAcceptor(self))
+    }
 }
 
-impl<T: Acceptor> Acceptor for AcmeAcceptor<T>
+impl<T> Acceptor for AcmeAcceptor<T>
 where
     T: Acceptor + Send + 'static,
-    <T as Acceptor>::Conn: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    <T as Acceptor>::Stream: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    type Conn = HandshakeStream<TlsStream<T::Conn>>;
+    type Coupler = TcpCoupler<Self::Stream>;
+    type Stream = HandshakeStream<TlsStream<T::Stream>>;
 
     #[inline]
     fn holdings(&self) -> &[Holding] {
@@ -361,16 +430,22 @@ where
     }
 
     #[inline]
-    async fn accept(&mut self, fuse_factory: Option<ArcFuseFactory>) -> IoResult<Accepted<Self::Conn>> {
+    async fn accept(
+        &mut self,
+        fuse_factory: Option<ArcFuseFactory>,
+    ) -> IoResult<Accepted<Self::Coupler, Self::Stream>> {
         let Accepted {
-            conn,
+            coupler: _,
+            stream,
+            fusewire,
             local_addr,
             remote_addr,
             ..
         } = self.inner.accept(fuse_factory).await?;
-        let fusewire = conn.fusewire();
         Ok(Accepted {
-            conn: HandshakeStream::new(self.tls_acceptor.accept(conn), fusewire),
+            coupler: TcpCoupler::new(),
+            stream: HandshakeStream::new(self.tls_acceptor.accept(stream), fusewire.clone()),
+            fusewire,
             local_addr,
             remote_addr,
             http_scheme: Scheme::HTTPS,

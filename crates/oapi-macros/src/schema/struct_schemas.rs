@@ -60,7 +60,7 @@ impl NamedStructSchema<'_> {
         &self,
         field: &Field,
         flatten: bool,
-        container_rules: &Option<SerdeContainer>,
+        container_rules: Option<&SerdeContainer>,
     ) -> DiagResult<NamedStructFieldOptions<'_>> {
         let type_tree = &mut TypeTree::from_type(&field.ty)?;
 
@@ -88,7 +88,7 @@ impl NamedStructSchema<'_> {
                 let field_ident = field
                     .ident
                     .as_ref()
-                    .expect("field ident shoule be exist")
+                    .expect("field ident should be exist")
                     .to_owned();
                 let struct_ident = format_ident!("{}", &self.struct_name);
                 features_inner.push(Feature::Default(Default::new_default_trait(
@@ -188,7 +188,7 @@ impl TryToTokens for NamedStructSchema<'_> {
             let mut field_name = &*field
                 .ident
                 .as_ref()
-                .expect("field ident shoule be exists")
+                .expect("field ident should be exists")
                 .to_string();
 
             if field_name.starts_with("r#") {
@@ -200,18 +200,18 @@ impl TryToTokens for NamedStructSchema<'_> {
                 rename_field_value,
                 required,
                 is_option,
-            } = self.field_as_schema_property(field, false, &container_rules)?;
+            } = self.field_as_schema_property(field, false, container_rules.as_ref())?;
             let rename_to = field_rule
                 .as_ref()
                 .and_then(|field_rule| field_rule.rename.as_deref().map(Cow::Borrowed))
                 .or(rename_field_value);
             let rename_all = container_rules
                 .as_ref()
-                .and_then(|container_rule| container_rule.rename_all.as_ref())
+                .and_then(|container_rule| container_rule.rename_all)
                 .or_else(|| {
                     self.rename_all
                         .as_ref()
-                        .map(|rename_all| rename_all.as_rename_rule())
+                        .map(|rename_all| rename_all.to_rename_rule())
                 });
 
             let name = crate::rename::<FieldRename>(field_name, rename_to, rename_all)
@@ -251,7 +251,7 @@ impl TryToTokens for NamedStructSchema<'_> {
 
             for field in flatten_fields {
                 let NamedStructFieldOptions { property, .. } =
-                    self.field_as_schema_property(field, true, &container_rules)?;
+                    self.field_as_schema_property(field, true, container_rules.as_ref())?;
 
                 match property {
                     Property::Schema(_) | Property::SchemaWith(_) => {
@@ -402,6 +402,35 @@ impl TryToTokens for UnnamedStructSchema<'_> {
                     }
                 }
             }
+
+            if fields_len > 1 {
+                // The struct has multiple unnamed fields.
+                // Validation related features are only allowed on unnamed structs with a single field (i.e., newtype pattern).
+                if let Some(ref mut features) = unnamed_struct_features {
+                    if let Some((name, span)) = features.iter().find_map(|feature| match feature {
+                        Feature::MultipleOf(attr) => Some(("multiple_of", attr.span())),
+                        Feature::Maximum(attr) => Some(("maximum", attr.span())),
+                        Feature::Minimum(attr) => Some(("minimum", attr.span())),
+                        Feature::ExclusiveMaximum(attr) => Some(("exclusive_maximum", attr.span())),
+                        Feature::ExclusiveMinimum(attr) => Some(("exclusive_minimum", attr.span())),
+                        Feature::MaxLength(attr) => Some(("max_length", attr.span())),
+                        Feature::MinLength(attr) => Some(("min_length", attr.span())),
+                        Feature::Pattern(attr) => Some(("pattern", attr.span())),
+                        Feature::MaxItems(attr) => Some(("max_items", attr.span())),
+                        Feature::MinItems(attr) => Some(("min_items", attr.span())),
+                        _ => None,
+                    }) {
+                        return Err(Diagnostic::spanned(
+                            span,
+                            DiagLevel::Error,
+                            format!(
+                                "{name} attribute is not allowed for unnamed structs with multiple fields",
+                            ),
+                        ));
+                    }
+                }
+            }
+
             let comments = CommentAttributes::from_attributes(self.attributes);
             let description = self
                 .description
@@ -449,9 +478,9 @@ impl TryToTokens for UnnamedStructSchema<'_> {
                 .map(ComponentDescription::Description)
                 .or(Some(ComponentDescription::CommentAttributes(&comments)));
             tokens.extend(quote! {
-            .to_array_builder()
-                .max_items(Some(#fields_len))
-                .min_items(Some(#fields_len))
+            .to_array()
+                .max_items(#fields_len)
+                .min_items(#fields_len)
                 #description
             })
         }

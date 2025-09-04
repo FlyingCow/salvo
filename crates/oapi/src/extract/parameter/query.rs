@@ -62,7 +62,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        T::deserialize(deserializer).map(|value| QueryParam(Some(value)))
+        T::deserialize(deserializer).map(|value| Self(Some(value)))
     }
 }
 
@@ -85,7 +85,7 @@ impl<'ex, T> Extractible<'ex> for QueryParam<T, true>
 where
     T: Deserialize<'ex>,
 {
-    fn metadata() -> &'ex Metadata {
+    fn metadata() -> &'static Metadata {
         static METADATA: Metadata = Metadata::new("");
         &METADATA
     }
@@ -97,8 +97,7 @@ where
     async fn extract_with_arg(req: &'ex mut Request, arg: &str) -> Result<Self, ParseError> {
         let value = req.query(arg).ok_or_else(|| {
             ParseError::other(format!(
-                "query parameter {} not found or convert to type failed",
-                arg
+                "query parameter {arg} not found or convert to type failed"
             ))
         })?;
         Ok(Self(value))
@@ -108,7 +107,7 @@ impl<'ex, T> Extractible<'ex> for QueryParam<T, false>
 where
     T: Deserialize<'ex>,
 {
-    fn metadata() -> &'ex Metadata {
+    fn metadata() -> &'static Metadata {
         static METADATA: Metadata = Metadata::new("");
         &METADATA
     }
@@ -146,38 +145,38 @@ mod tests {
 
     #[test]
     fn test_required_query_param_into_inner() {
-        let param = QueryParam::<String, true>(Some("param".to_string()));
-        assert_eq!("param".to_string(), param.into_inner());
+        let param = QueryParam::<String, true>(Some("param".to_owned()));
+        assert_eq!("param".to_owned(), param.into_inner());
     }
 
     #[test]
     fn test_required_query_param_deref() {
-        let param = QueryParam::<String, true>(Some("param".to_string()));
-        assert_eq!(&"param".to_string(), param.deref())
+        let param = QueryParam::<String, true>(Some("param".to_owned()));
+        assert_eq!(&"param".to_owned(), param.deref())
     }
 
     #[test]
     fn test_required_query_param_deref_mut() {
-        let mut param = QueryParam::<String, true>(Some("param".to_string()));
-        assert_eq!(&mut "param".to_string(), param.deref_mut())
+        let mut param = QueryParam::<String, true>(Some("param".to_owned()));
+        assert_eq!(&mut "param".to_owned(), param.deref_mut())
     }
 
     #[test]
     fn test_query_param_into_inner() {
-        let param = QueryParam::<String, false>(Some("param".to_string()));
-        assert_eq!(Some("param".to_string()), param.into_inner());
+        let param = QueryParam::<String, false>(Some("param".to_owned()));
+        assert_eq!(Some("param".to_owned()), param.into_inner());
     }
 
     #[test]
     fn test_query_param_deref() {
-        let param = QueryParam::<String, false>(Some("param".to_string()));
-        assert_eq!(&Some("param".to_string()), param.deref())
+        let param = QueryParam::<String, false>(Some("param".to_owned()));
+        assert_eq!(&Some("param".to_owned()), param.deref())
     }
 
     #[test]
     fn test_query_param_deref_mut() {
-        let mut param = QueryParam::<String, false>(Some("param".to_string()));
-        assert_eq!(&mut Some("param".to_string()), param.deref_mut())
+        let mut param = QueryParam::<String, false>(Some("param".to_owned()));
+        assert_eq!(&mut Some("param".to_owned()), param.deref_mut())
     }
 
     #[test]
@@ -188,14 +187,14 @@ mod tests {
 
     #[test]
     fn test_query_param_debug() {
-        let param = QueryParam::<String, true>(Some("param".to_string()));
-        assert_eq!(format!("{:?}", param), r#"Some("param")"#);
+        let param = QueryParam::<String, true>(Some("param".to_owned()));
+        assert_eq!(format!("{param:?}"), r#"Some("param")"#);
     }
 
     #[test]
     fn test_query_param_display() {
-        let param = QueryParam::<String, true>(Some("param".to_string()));
-        assert_eq!(format!("{}", param), "param");
+        let param = QueryParam::<String, true>(Some("param".to_owned()));
+        assert_eq!(format!("{param}"), "param");
     }
 
     #[test]
@@ -217,7 +216,7 @@ mod tests {
         let schema = req.uri().scheme().cloned().unwrap();
         let mut req = Request::from_hyper(req, schema);
         req.queries_mut()
-            .insert("param".to_string(), "param".to_string());
+            .insert("param".to_owned(), "param".to_owned());
         let result = QueryParam::<String, true>::extract_with_arg(&mut req, "param").await;
         assert_eq!(result.unwrap().0.unwrap(), "param");
     }
@@ -251,7 +250,7 @@ mod tests {
         let schema = req.uri().scheme().cloned().unwrap();
         let mut req = Request::from_hyper(req, schema);
         req.queries_mut()
-            .insert("param".to_string(), "param".to_string());
+            .insert("param".to_owned(), "param".to_owned());
         let result = QueryParam::<String, false>::extract_with_arg(&mut req, "param").await;
         assert_eq!(result.unwrap().0.unwrap(), "param");
     }

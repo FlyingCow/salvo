@@ -1,23 +1,24 @@
 //! Oidc(OpenID Connect) supports.
 
+use std::fmt::{self, Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use hyper_util::rt::TokioExecutor;
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation};
-use salvo_core::http::{header::CACHE_CONTROL, uri::Uri};
 use salvo_core::Depot;
-use serde::de::DeserializeOwned;
+use salvo_core::http::{header::CACHE_CONTROL, uri::Uri};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tokio::sync::{Notify, RwLock};
 
 use super::{JwtAuthDecoder, JwtAuthError};
@@ -36,6 +37,16 @@ pub struct OidcDecoder {
     cache: Arc<RwLock<JwkSetStore>>,
     cache_state: Arc<CacheState>,
     notifier: Arc<Notify>,
+}
+
+impl Debug for OidcDecoder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OidcDecoder")
+            .field("issuer", &self.issuer)
+            .field("http_client", &self.http_client)
+            .field("cache_state", &self.cache_state)
+            .finish()
+    }
 }
 
 impl JwtAuthDecoder for OidcDecoder {
@@ -68,11 +79,20 @@ where
     /// The validation options for the decoder.
     pub validation: Option<Validation>,
 }
+impl<T: AsRef<str>> Debug for DecoderBuilder<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DecoderBuilder")
+            .field("http_client", &self.http_client)
+            .field("validation", &self.validation)
+            .finish()
+    }
+}
 impl<T> DecoderBuilder<T>
 where
     T: AsRef<str>,
 {
     /// Create a new `DecoderBuilder`.
+    #[must_use]
     pub fn new(issuer: T) -> Self {
         Self {
             issuer,
@@ -81,11 +101,13 @@ where
         }
     }
     /// Set the http client for the decoder.
+    #[must_use]
     pub fn http_client(mut self, client: HyperClient) -> Self {
         self.http_client = Some(client);
         self
     }
     /// Set the validation options for the decoder.
+    #[must_use]
     pub fn validation(mut self, validation: Validation) -> Self {
         self.validation = Some(validation);
         self
@@ -98,13 +120,17 @@ where
             http_client,
             validation,
         } = self;
-        let issuer = issuer.as_ref().trim_end_matches('/').to_string();
+        let issuer = issuer.as_ref().trim_end_matches('/').to_owned();
 
-        //Create an empty JWKS to initalize our Cache
+        //Create an empty JWKS to initialize our Cache
         let jwks = JwkSet { keys: Vec::new() };
 
         let validation = validation.unwrap_or_default();
-        let cache = Arc::new(RwLock::new(JwkSetStore::new(jwks, CachePolicy::default(), validation)));
+        let cache = Arc::new(RwLock::new(JwkSetStore::new(
+            jwks,
+            CachePolicy::default(),
+            validation,
+        )));
         let cache_state = Arc::new(CacheState::new());
 
         let https = HttpsConnectorBuilder::new()
@@ -113,7 +139,8 @@ where
             .https_only()
             .enable_http1()
             .build();
-        let http_client = http_client.unwrap_or_else(|| Client::builder(TokioExecutor::new()).build(https));
+        let http_client =
+            http_client.unwrap_or_else(|| Client::builder(TokioExecutor::new()).build(https));
         let decoder = OidcDecoder {
             issuer,
             http_client,
@@ -146,7 +173,10 @@ impl OidcDecoder {
         format!("{}/.well-known/openid-configuration", &self.issuer)
     }
     async fn get_config(&self) -> Result<OidcConfig, JwtAuthError> {
-        let res = self.http_client.get(self.config_url().parse::<Uri>()?).await?;
+        let res = self
+            .http_client
+            .get(self.config_url().parse::<Uri>()?)
+            .await?;
         let body = res.into_body().collect().await?.to_bytes();
         let config = serde_json::from_slice(&body)?;
         Ok(config)
@@ -189,7 +219,9 @@ impl OidcDecoder {
                 self.cache_state.set_is_error(false);
                 let read = self.cache.read().await;
 
-                if read.jwks == fetch.jwks && fetch.cache_policy.unwrap_or(read.cache_policy) == read.cache_policy {
+                if read.jwks == fetch.jwks
+                    && fetch.cache_policy.unwrap_or(read.cache_policy) == read.cache_policy
+                {
                     return Ok(UpdateAction::NoUpdate);
                 }
                 drop(read);
@@ -220,7 +252,7 @@ impl OidcDecoder {
     }
 
     /// If we are currently updating the JWKS in the background this function will resolve when the update it complete
-    /// If we are not currently updating the JWKS in the backgroun, this function will resolve immediatly.
+    /// If we are not currently updating the JWKS in the background, this function will resolve immediately.
     async fn wait_update(&self) {
         if self.cache_state.is_revalidating() {
             self.notifier.notified().await;
@@ -292,6 +324,13 @@ pub struct DecodingInfo {
     validation: Validation,
     // alg: Algorithm,
 }
+impl Debug for DecodingInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DecodingInfo")
+            .field("validation", &self.validation)
+            .finish()
+    }
+}
 impl DecodingInfo {
     fn new(key: DecodingKey, alg: Algorithm, validation_settings: &Validation) -> Self {
         let mut validation = Validation::new(alg);
@@ -299,7 +338,9 @@ impl DecodingInfo {
         validation.aud.clone_from(&validation_settings.aud);
         validation.iss.clone_from(&validation_settings.iss);
         validation.leeway = validation_settings.leeway;
-        validation.required_spec_claims.clone_from(&validation_settings.required_spec_claims);
+        validation
+            .required_spec_claims
+            .clone_from(&validation_settings.required_spec_claims);
 
         validation.sub.clone_from(&validation_settings.sub);
         validation.validate_exp = validation_settings.validate_exp;
@@ -327,7 +368,7 @@ impl DecodingInfo {
     }
 }
 
-/// Helper Stuct that contains the response of a request to the jwks uri
+/// Helper Struct that contains the response of a request to the jwks uri
 /// `cache_policy` will be Some when [`cache::Strategy`] is set to [`cache::Strategy::Automatic`].
 #[derive(Debug)]
 pub(crate) struct JwkSetFetch {
@@ -341,7 +382,10 @@ struct OidcConfig {
     jwks_uri: String,
 }
 
-pub(crate) fn decode_jwk(jwk: &Jwk, validation: &Validation) -> Result<(String, DecodingInfo), JwtAuthError> {
+pub(crate) fn decode_jwk(
+    jwk: &Jwk,
+    validation: &Validation,
+) -> Result<(String, DecodingInfo), JwtAuthError> {
     let kid = jwk.common.key_id.clone();
     let alg = jwk.common.key_algorithm;
 
@@ -386,4 +430,25 @@ pub(crate) fn current_time() -> u64 {
         .duration_since(UNIX_EPOCH)
         .expect("Time Went Backwards")
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn test_decode_jwk_missing_alg() {
+        let jwk_json = json!({
+            "kty": "RSA",
+            "kid": "test-rsa",
+            "n": "...",
+            "e": "AQAB"
+        });
+        let jwk: Jwk = serde_json::from_value(jwk_json).unwrap();
+        let validation = Validation::new(Algorithm::RS256);
+        let result = decode_jwk(&jwk, &validation);
+        assert!(result.is_err());
+    }
 }

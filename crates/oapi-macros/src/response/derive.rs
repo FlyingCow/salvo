@@ -32,7 +32,7 @@ impl<'a> ToResponse<'a> {
         data: &'a Data,
         ident: &'a Ident,
         generics: &'a Generics,
-    ) -> DiagResult<ToResponse<'a>> {
+    ) -> DiagResult<Self> {
         let response = match &data {
             Data::Struct(struct_value) => match &struct_value.fields {
                 Fields::Named(fields) => {
@@ -524,7 +524,7 @@ impl<'r> EnumResponse<'r> {
                 return Err(Diagnostic::spanned(
                     ident.span(), DiagLevel::Error,
                     "Enum with `#[content]` attribute in variant cannot have enum level `example` or `examples` defined"
-             ).help(format!("Try defining `{}` on the enum variant", ident)));
+             ).help(format!("Try defining `{ident}` on the enum variant")));
             }
         }
 
@@ -553,7 +553,7 @@ impl<'r> EnumResponse<'r> {
         Ok(Self(response_value.into()))
     }
 
-    fn parse_variant_attributes(variant: &Variant) -> DiagResult<VariantAttributes> {
+    fn parse_variant_attributes(variant: &Variant) -> DiagResult<VariantAttributes<'_>> {
         let variant_derive_response_value =
             DeriveToResponseValue::from_attributes(variant.attrs.as_slice())?;
         // named enum variant should not have field attributes
@@ -612,7 +612,7 @@ impl<'r> EnumResponse<'r> {
             type_and_content: field_and_content,
             mut derive_value,
             is_inline,
-        }: VariantAttributes,
+        }: VariantAttributes<'_>,
     ) -> Option<Content<'_>> {
         let (example, examples) = if let Some(variant_derive) = &mut derive_value {
             (

@@ -1,6 +1,7 @@
 //! rustls module
 use std::error::Error as StdError;
-use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+use std::fmt::{self, Debug, Formatter};
+use std::io::{Error as IoError, Result as IoResult};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,10 +12,10 @@ use futures_util::task::noop_waker_ref;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::server::TlsStream;
 
+use crate::conn::tcp::{DynTcpAcceptor, TcpCoupler, ToDynTcpAcceptor};
 use crate::conn::{Accepted, Acceptor, HandshakeStream, Holding, IntoConfigStream, Listener};
 use crate::fuse::ArcFuseFactory;
 use crate::http::uri::Scheme;
-use crate::http::{HttpConnection};
 
 use super::ServerConfig;
 
@@ -23,6 +24,12 @@ pub struct RustlsListener<S, C, T, E> {
     config_stream: S,
     inner: T,
     _phantom: PhantomData<(C, E)>,
+}
+
+impl<S, C, T, E> Debug for RustlsListener<S, C, T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RustlsListener").finish()
+    }
 }
 
 impl<S, C, T, E> RustlsListener<S, C, T, E>
@@ -35,7 +42,7 @@ where
     /// Create a new `RustlsListener`.
     #[inline]
     pub fn new(config_stream: S, inner: T) -> Self {
-        RustlsListener {
+        Self {
             config_stream,
             inner,
             _phantom: PhantomData,
@@ -47,9 +54,10 @@ impl<S, C, T, E> Listener for RustlsListener<S, C, T, E>
 where
     S: IntoConfigStream<C> + Send + 'static,
     C: TryInto<ServerConfig, Error = E> + Send + 'static,
-    T: Listener + Send,
+    T: Listener + Send + 'static,
     T::Acceptor: Send + 'static,
-    E: StdError + Send,
+    <T::Acceptor as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    E: StdError + Send + 'static,
 {
     type Acceptor = RustlsAcceptor<BoxStream<'static, C>, C, T::Acceptor, E>;
 
@@ -69,15 +77,23 @@ pub struct RustlsAcceptor<S, C, T, E> {
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
     _phantom: PhantomData<(C, E)>,
 }
+
+impl<S, C, T, E> Debug for RustlsAcceptor<S, C, T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RustlsAcceptor").finish()
+    }
+}
+
 impl<S, C, T, E> RustlsAcceptor<S, C, T, E>
 where
-    S: Stream<Item = C> + Send + 'static,
+    S: Stream<Item = C> + Unpin + Send + 'static,
     C: TryInto<ServerConfig, Error = E> + Send + 'static,
-    T: Acceptor + Send,
-    E: StdError + Send,
+    T: Acceptor + Send + 'static,
+    T::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    E: StdError + Send + 'static,
 {
     /// Create a new `RustlsAcceptor`.
-    pub fn new(config_stream: S, inner: T) -> RustlsAcceptor<S, C, T, E> {
+    pub fn new(config_stream: S, inner: T) -> Self {
         let holdings = inner
             .holdings()
             .iter()
@@ -99,7 +115,7 @@ where
                 }
             })
             .collect();
-        RustlsAcceptor {
+        Self {
             config_stream,
             inner,
             holdings,
@@ -112,6 +128,11 @@ where
     pub fn inner(&self) -> &T {
         &self.inner
     }
+
+    /// Convert this `RustlsAcceptor` into a boxed `DynTcpAcceptor`.
+    pub fn into_boxed(self) -> Box<dyn DynTcpAcceptor> {
+        Box::new(ToDynTcpAcceptor(self))
+    }
 }
 
 impl<S, C, T, E> Acceptor for RustlsAcceptor<S, C, T, E>
@@ -119,20 +140,24 @@ where
     S: Stream<Item = C> + Send + Unpin + 'static,
     C: TryInto<ServerConfig, Error = E> + Send + 'static,
     T: Acceptor + Send + 'static,
-    <T as Acceptor>::Conn: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    <T as Acceptor>::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     E: StdError + Send,
 {
-    type Conn = HandshakeStream<TlsStream<T::Conn>>;
+    type Coupler = TcpCoupler<Self::Stream>;
+    type Stream = HandshakeStream<TlsStream<T::Stream>>;
 
     fn holdings(&self) -> &[Holding] {
         &self.holdings
     }
 
-    async fn accept(&mut self, fuse_factory: Option<ArcFuseFactory>) -> IoResult<Accepted<Self::Conn>> {
+    async fn accept(
+        &mut self,
+        fuse_factory: Option<ArcFuseFactory>,
+    ) -> IoResult<Accepted<Self::Coupler, Self::Stream>> {
         let config = {
             let mut config = None;
-            while let Poll::Ready(Some(item)) =
-                Pin::new(&mut self.config_stream).poll_next(&mut Context::from_waker(noop_waker_ref()))
+            while let Poll::Ready(Some(item)) = Pin::new(&mut self.config_stream)
+                .poll_next(&mut Context::from_waker(noop_waker_ref()))
             {
                 config = Some(item);
             }
@@ -141,7 +166,7 @@ where
         if let Some(config) = config {
             let config: ServerConfig = config
                 .try_into()
-                .map_err(|e| IoError::new(ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| IoError::other(e.to_string()))?;
             let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
             if self.tls_acceptor.is_some() {
                 tracing::info!("tls config changed.");
@@ -150,20 +175,22 @@ where
             }
             self.tls_acceptor = Some(tls_acceptor);
         }
-        let tls_acceptor = match &self.tls_acceptor {
-            Some(tls_acceptor) => tls_acceptor,
-            None => return Err(IoError::new(ErrorKind::Other, "rustls: invalid tls config.")),
+        let Some(tls_acceptor) = &self.tls_acceptor else {
+            return Err(IoError::other("rustls: invalid tls config."));
         };
 
         let Accepted {
-            conn,
+            coupler: _,
+            stream,
+            fusewire,
             local_addr,
             remote_addr,
             ..
         } = self.inner.accept(fuse_factory).await?;
-        let fusewire = conn.fusewire();
         Ok(Accepted {
-            conn: HandshakeStream::new(tls_acceptor.accept(conn), fusewire),
+            coupler: TcpCoupler::new(),
+            stream: HandshakeStream::new(tls_acceptor.accept(stream), fusewire.clone()),
+            fusewire,
             local_addr,
             remote_addr,
             http_scheme: Scheme::HTTPS,

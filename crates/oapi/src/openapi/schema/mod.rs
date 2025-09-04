@@ -10,7 +10,7 @@ mod one_of;
 
 pub use all_of::AllOf;
 pub use any_of::AnyOf;
-pub use array::{Array, ToArray};
+pub use array::Array;
 pub use object::Object;
 pub use one_of::OneOf;
 
@@ -79,10 +79,12 @@ impl IntoIterator for Schemas {
 
 impl Schemas {
     /// Construct a new empty [`Schemas`]. This is effectively same as calling [`Schemas::default`].
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
     /// Inserts a key-value pair into the instance and returns `self`.
+    #[must_use]
     pub fn schema<K: Into<String>, V: Into<RefOr<Schema>>>(mut self, key: K, value: V) -> Self {
         self.insert(key, value);
         self
@@ -95,7 +97,7 @@ impl Schemas {
     ///
     /// If a key from `other` is already present in `self`, the respective
     /// value from `self` will be overwritten with the respective value from `other`.
-    pub fn append(&mut self, other: &mut Schemas) {
+    pub fn append(&mut self, other: &mut Self) {
         let items = std::mem::take(&mut other.0);
         for item in items {
             self.insert(item.0, item.1);
@@ -118,8 +120,9 @@ impl Schemas {
 ///
 /// Can be used in places where an item can be serialized as `null`. This is used with unit type
 /// enum variants and tuple unit types.
+#[must_use]
 pub fn empty() -> Schema {
-    Schema::Object(
+    Schema::object(
         Object::new()
             .schema_type(SchemaType::AnyValue)
             .default_value(serde_json::Value::Null),
@@ -139,7 +142,7 @@ pub enum Schema {
     Array(Array),
     /// Defines object schema. Object is either `object` holding **properties** which are other [`Schema`]s
     /// or can be a field within the [`Object`].
-    Object(Object),
+    Object(Box<Object>),
     /// Creates a _OneOf_ type [composite Object][composite] schema. This schema
     /// is used to map multiple schemas together where API endpoint could return any of them.
     /// [`Schema::OneOf`] is created form complex enum where enum holds other than unit types.
@@ -160,19 +163,17 @@ pub enum Schema {
 
 impl Default for Schema {
     fn default() -> Self {
-        Schema::Object(Default::default())
+        Self::Object(Default::default())
     }
 }
 
-// impl Schema {
-//     pub fn origin_type_id(&self) -> Option<TypeId> {
-//         if let Self::Object(o) = self {
-//             o.origin_type_id
-//         } else {
-//             None
-//         }
-//     }
-// }
+impl Schema {
+    /// Construct a new [`Schema`] object.
+    #[must_use]
+    pub fn object(obj: Object) -> Self {
+        Self::Object(Box::new(obj))
+    }
+}
 
 /// OpenAPI [Discriminator][discriminator] object which can be optionally used together with
 /// [`OneOf`] composite object.
@@ -211,6 +212,7 @@ impl Discriminator {
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -235,7 +237,7 @@ impl<T> From<RefOr<T>> for AdditionalProperties<T> {
 
 impl From<Object> for AdditionalProperties<Schema> {
     fn from(value: Object) -> Self {
-        Self::RefOr(RefOr::Type(Schema::Object(value)))
+        Self::RefOr(RefOr::Type(Schema::object(value)))
     }
 }
 
@@ -277,6 +279,7 @@ pub struct Ref {
 impl Ref {
     /// Construct a new [`Ref`] with custom ref location. In most cases this is not necessary
     /// and [`Ref::from_schema_name`] could be used instead.
+    #[must_use]
     pub fn new<I: Into<String>>(ref_location: I) -> Self {
         Self {
             ref_location: ref_location.into(),
@@ -286,17 +289,20 @@ impl Ref {
 
     /// Construct a new [`Ref`] from provided schema name. This will create a [`Ref`] that
     /// references the reusable schemas.
+    #[must_use]
     pub fn from_schema_name<I: Into<String>>(schema_name: I) -> Self {
         Self::new(format!("#/components/schemas/{}", schema_name.into()))
     }
 
     /// Construct a new [`Ref`] from provided response name. This will create a [`Ref`] that
     /// references the reusable response.
+    #[must_use]
     pub fn from_response_name<I: Into<String>>(response_name: I) -> Self {
         Self::new(format!("#/components/responses/{}", response_name.into()))
     }
 
     /// Add or change reference location of the actual component.
+    #[must_use]
     pub fn ref_location(mut self, ref_location: String) -> Self {
         self.ref_location = ref_location;
         self
@@ -304,16 +310,18 @@ impl Ref {
 
     /// Add or change reference location of the actual component automatically formatting the $ref
     /// to `#/components/schemas/...` format.
+    #[must_use]
     pub fn ref_location_from_schema_name<S: Into<String>>(mut self, schema_name: S) -> Self {
         self.ref_location = format!("#/components/schemas/{}", schema_name.into());
         self
     }
 
-    // TODO: REMOVE THE unnecesary description Option wrapping.
+    // TODO: REMOVE THE unnecessary description Option wrapping.
 
     /// Add or change description which by default should override that of the referenced component.
     /// Description supports markdown syntax. If referenced object type does not support
     /// description this field does not have effect.
+    #[must_use]
     pub fn description<S: Into<String>>(mut self, description: S) -> Self {
         self.description = description.into();
         self
@@ -321,9 +329,16 @@ impl Ref {
 
     /// Add or change short summary which by default should override that of the referenced component. If
     /// referenced component does not support summary field this does not have effect.
+    #[must_use]
     pub fn summary<S: Into<String>>(mut self, summary: S) -> Self {
         self.summary = summary.into();
         self
+    }
+
+    /// Convert type to [`Array`].
+    #[must_use]
+    pub fn to_array(self) -> Array {
+        Array::new().items(self)
     }
 }
 
@@ -341,11 +356,11 @@ impl<T> From<T> for RefOr<T> {
 
 impl Default for RefOr<Schema> {
     fn default() -> Self {
-        Self::Type(Schema::Object(Object::new()))
+        Self::Type(Schema::object(Object::new()))
     }
 }
 
-impl ToArray for RefOr<Schema> {}
+// impl ToArray for RefOr<Schema> {}
 
 /// Represents type of [`Schema`].
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -355,7 +370,7 @@ pub enum SchemaType {
     Basic(BasicType),
     /// Multiple types rendered as [`slice`]
     Array(Vec<BasicType>),
-    /// Type that is considred typeless. _`AnyValue`_ will omit the type definition from the schema
+    /// Type that is considered typeless. _`AnyValue`_ will omit the type definition from the schema
     /// making it to accept any type possible.
     AnyValue,
 }
@@ -368,7 +383,7 @@ impl Default for SchemaType {
 
 impl From<BasicType> for SchemaType {
     fn from(value: BasicType) -> Self {
-        SchemaType::basic(value)
+        Self::basic(value)
     }
 }
 
@@ -380,7 +395,7 @@ impl FromIterator<BasicType> for SchemaType {
 impl SchemaType {
     /// Instantiate new [`SchemaType`] of given [`BasicType`]
     ///
-    /// Method accpets one argument `type` to create [`SchemaType`] for.
+    /// Method accepets one argument `type` to create [`SchemaType`] for.
     ///
     /// # Examples
     ///
@@ -389,6 +404,7 @@ impl SchemaType {
     /// # use salvo_oapi::schema::{SchemaType, BasicType};
     /// let ty = SchemaType::basic(BasicType::String);
     /// ```
+    #[must_use]
     pub fn basic(r#type: BasicType) -> Self {
         Self::Basic(r#type)
     }
@@ -397,12 +413,14 @@ impl SchemaType {
     ///
     /// This is same as calling [`SchemaType::AnyValue`] but in a function form `() -> SchemaType`
     /// allowing it to be used as argument for _serde's_ _`default = "..."`_.
+    #[must_use]
     pub fn any() -> Self {
-        SchemaType::AnyValue
+        Self::AnyValue
     }
 
     /// Check whether this [`SchemaType`] is any value _(typeless)_ returning true on any value
     /// schema type.
+    #[must_use]
     pub fn is_any_value(&self) -> bool {
         matches!(self, Self::AnyValue)
     }
@@ -412,7 +430,7 @@ impl SchemaType {
 ///
 /// [`BasicType`] is used to create a [`SchemaType`] that defines the type of the [`Schema`].
 /// [`SchemaType`] can be created from a single [`BasicType`] or multiple [`BasicType`]s according to the
-/// OpenAPI 3.1 spec. Since the OpenAPI 3.1 is fully compatible with JSON schema the definiton of
+/// OpenAPI 3.1 spec. Since the OpenAPI 3.1 is fully compatible with JSON schema the definition of
 /// the _**type**_ property comes from [JSON Schema type](https://json-schema.org/understanding-json-schema/reference/type).
 ///
 /// # Examples
@@ -899,10 +917,10 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_array_within_ref_or_t_object_builder() {
-        let ref_or_schema = RefOr::Type(Schema::Object(Object::new().property(
+        let ref_or_schema = RefOr::Type(Schema::object(Object::new().property(
             "test",
             RefOr::Type(Schema::Array(Array::new().items(RefOr::Type(
-                Schema::Object(Object::new().property("element", RefOr::Ref(Ref::new("#/test")))),
+                Schema::object(Object::new().property("element", RefOr::Ref(Ref::new("#/test")))),
             )))),
         )));
 
@@ -914,18 +932,18 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_one_of_within_ref_or_t_object_builder() {
-        let ref_or_schema = RefOr::Type(Schema::Object(
+        let ref_or_schema = RefOr::Type(Schema::object(
             Object::new().property(
                 "test",
                 RefOr::Type(Schema::OneOf(
                     OneOf::new()
                         .item(Schema::Array(Array::new().items(RefOr::Type(
-                            Schema::Object(
+                            Schema::object(
                                 Object::new().property("element", RefOr::Ref(Ref::new("#/test"))),
                             ),
                         ))))
                         .item(Schema::Array(Array::new().items(RefOr::Type(
-                            Schema::Object(
+                            Schema::object(
                                 Object::new().property("foobar", RefOr::Ref(Ref::new("#/foobar"))),
                             ),
                         )))),
@@ -941,17 +959,17 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_all_of_of_within_ref_or_t_object() {
-        let ref_or_schema = RefOr::Type(Schema::Object(
+        let ref_or_schema = RefOr::Type(Schema::object(
             Object::new().property(
                 "test",
                 RefOr::Type(Schema::AllOf(
                     AllOf::new()
                         .item(Schema::Array(Array::new().items(RefOr::Type(
-                            Schema::Object(
+                            Schema::object(
                                 Object::new().property("element", RefOr::Ref(Ref::new("#/test"))),
                             ),
                         ))))
-                        .item(RefOr::Type(Schema::Object(
+                        .item(RefOr::Type(Schema::object(
                             Object::new().property("foobar", RefOr::Ref(Ref::new("#/foobar"))),
                         ))),
                 )),
@@ -966,17 +984,17 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_any_of_of_within_ref_or_t_object() {
-        let ref_or_schema = RefOr::Type(Schema::Object(
+        let ref_or_schema = RefOr::Type(Schema::object(
             Object::new().property(
                 "test",
                 RefOr::Type(Schema::AnyOf(
                     AnyOf::new()
                         .item(Schema::Array(Array::new().items(RefOr::Type(
-                            Schema::Object(
+                            Schema::object(
                                 Object::new().property("element", RefOr::Ref(Ref::new("#/test"))),
                             ),
                         ))))
-                        .item(RefOr::Type(Schema::Object(
+                        .item(RefOr::Type(Schema::object(
                             Object::new().property("foobar", RefOr::Ref(Ref::new("#/foobar"))),
                         ))),
                 )),
@@ -993,7 +1011,9 @@ mod tests {
     #[test]
     fn serialize_deserialize_schema_array_ref_or_t() {
         let ref_or_schema = RefOr::Type(Schema::Array(Array::new().items(RefOr::Type(
-            Schema::Object(Object::new().property("element", RefOr::Ref(Ref::new("#/test")))),
+            Schema::Object(Box::new(
+                Object::new().property("element", RefOr::Ref(Ref::new("#/test"))),
+            )),
         ))));
 
         let json_str = serde_json::to_string(&ref_or_schema).expect("");
@@ -1004,7 +1024,7 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_schema_array() {
-        let ref_or_schema = Array::new().items(RefOr::Type(Schema::Object(
+        let ref_or_schema = Array::new().items(RefOr::Type(Schema::object(
             Object::new().property("element", RefOr::Ref(Ref::new("#/test"))),
         )));
 
@@ -1016,7 +1036,7 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_schema_with_additional_properties() {
-        let schema = Schema::Object(Object::new().property(
+        let schema = Schema::object(Object::new().property(
             "map",
             Object::new().additional_properties(AdditionalProperties::FreeForm(true)),
         ));
@@ -1029,29 +1049,30 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_schema_with_additional_properties_object() {
-        let schema = Schema::Object(Object::new().property(
+        let schema = Schema::object(Object::new().property(
             "map",
             Object::new().additional_properties(
                 Object::new().property("name", Object::with_type(BasicType::String)),
             ),
         ));
 
-        let json_str = serde_json::to_string(&schema).unwrap();
-        let deserialized: RefOr<Schema> = serde_json::from_str(&json_str).unwrap();
-        let json_de_str = serde_json::to_string(&deserialized).unwrap();
+        let json_str = serde_json::to_string(&schema).expect("serde json should success");
+        let deserialized: RefOr<Schema> =
+            serde_json::from_str(&json_str).expect("serde json should success");
+        let json_de_str = serde_json::to_string(&deserialized).expect("serde json should success");
         assert_eq!(json_str, json_de_str);
     }
 
     #[test]
     fn serialize_discriminator_with_mapping() {
         let mut discriminator = Discriminator::new("type");
-        discriminator.mapping = [("int".to_string(), "#/components/schemas/MyInt".to_string())]
+        discriminator.mapping = [("int".to_owned(), "#/components/schemas/MyInt".to_owned())]
             .into_iter()
             .collect::<PropMap<_, _>>();
         let one_of = OneOf::new()
             .item(Ref::from_schema_name("MyInt"))
             .discriminator(discriminator);
-        let json_value = serde_json::to_value(one_of).unwrap();
+        let json_value = serde_json::to_value(one_of).expect("serde json should success");
 
         assert_json_eq!(
             json_value,
@@ -1075,10 +1096,10 @@ mod tests {
     fn deserialize_reserialize_one_of_default_type() {
         let a = OneOf::new()
             .item(Schema::Array(Array::new().items(RefOr::Type(
-                Schema::Object(Object::new().property("element", RefOr::Ref(Ref::new("#/test")))),
+                Schema::object(Object::new().property("element", RefOr::Ref(Ref::new("#/test")))),
             ))))
             .item(Schema::Array(Array::new().items(RefOr::Type(
-                Schema::Object(Object::new().property("foobar", RefOr::Ref(Ref::new("#/foobar")))),
+                Schema::object(Object::new().property("foobar", RefOr::Ref(Ref::new("#/foobar")))),
             ))));
 
         let serialized_json = serde_json::to_string(&a).expect("should serialize to json");
@@ -1093,9 +1114,10 @@ mod tests {
         let object =
             Object::new().schema_type(SchemaType::from_iter([BasicType::Object, BasicType::Null]));
 
-        let json_str = serde_json::to_string(&object).unwrap();
-        let deserialized: Object = serde_json::from_str(&json_str).unwrap();
-        let json_de_str = serde_json::to_string(&deserialized).unwrap();
+        let json_str = serde_json::to_string(&object).expect("serde json should success");
+        let deserialized: Object =
+            serde_json::from_str(&json_str).expect("serde json should success");
+        let json_de_str = serde_json::to_string(&deserialized).expect("serde json should success");
         assert_eq!(json_str, json_de_str);
     }
 
@@ -1135,7 +1157,7 @@ mod tests {
     #[test]
     fn test_additional_properties_from_ref_or() {
         let additional_properties =
-            AdditionalProperties::from(RefOr::Type(Schema::Object(Object::new())));
+            AdditionalProperties::from(RefOr::Type(Schema::Object(Box::default())));
         assert_json_eq!(
             additional_properties,
             json!({

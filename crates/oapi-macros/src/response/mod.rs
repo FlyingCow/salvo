@@ -56,7 +56,7 @@ pub(crate) enum Response<'r> {
     /// A type that implements `salvo_oapi::ToResponses`.
     ToResponses(ExprPath),
     /// The tuple definition of a response.
-    Tuple(ResponseTuple<'r>),
+    Tuple(Box<ResponseTuple<'r>>),
 }
 
 impl Parse for Response<'_> {
@@ -85,12 +85,14 @@ impl<'r> ResponseTuple<'r> {
     // This will error if the `response` attribute has already been set
     fn as_value(&mut self, span: Span) -> syn::Result<&mut ResponseValue<'r>> {
         if self.inner.is_none() {
-            self.inner = Some(ResponseTupleInner::Value(ResponseValue::default()));
+            self.inner = Some(ResponseTupleInner::Value(
+                Box::new(ResponseValue::default()),
+            ));
         }
         if let ResponseTupleInner::Value(val) = self
             .inner
             .as_mut()
-            .expect("inner value shoule not be `None`")
+            .expect("inner value should not be `None`")
         {
             Ok(val)
         } else {
@@ -101,8 +103,8 @@ impl<'r> ResponseTuple<'r> {
     // Use with the `response` attribute, this will fail if an incompatible attribute has already been set
     fn set_ref_type(&mut self, span: Span, ty: InlineType<'r>) -> syn::Result<()> {
         match &mut self.inner {
-            None => self.inner = Some(ResponseTupleInner::Ref(ty)),
-            Some(ResponseTupleInner::Ref(r)) => *r = ty,
+            None => self.inner = Some(ResponseTupleInner::Ref(Box::new(ty))),
+            Some(ResponseTupleInner::Ref(r)) => *r = Box::new(ty),
             Some(ResponseTupleInner::Value(_)) => {
                 return Err(Error::new(span, RESPONSE_INCOMPATIBLE_ATTRIBUTES_MSG));
             }
@@ -113,8 +115,8 @@ impl<'r> ResponseTuple<'r> {
 
 #[derive(Debug)]
 pub(crate) enum ResponseTupleInner<'r> {
-    Value(ResponseValue<'r>),
-    Ref(InlineType<'r>),
+    Value(Box<ResponseValue<'r>>),
+    Ref(Box<InlineType<'r>>),
 }
 
 impl Parse for ResponseTuple<'_> {
@@ -180,7 +182,9 @@ impl Parse for ResponseTuple<'_> {
         }
 
         if response.inner.is_none() {
-            response.inner = Some(ResponseTupleInner::Value(ResponseValue::default()))
+            response.inner = Some(ResponseTupleInner::Value(
+                Box::new(ResponseValue::default()),
+            ))
         }
 
         Ok(response)
@@ -190,7 +194,7 @@ impl Parse for ResponseTuple<'_> {
 impl<'r> From<ResponseValue<'r>> for ResponseTuple<'r> {
     fn from(value: ResponseValue<'r>) -> Self {
         ResponseTuple {
-            inner: Some(ResponseTupleInner::Value(value)),
+            inner: Some(ResponseTupleInner::Value(Box::new(value))),
             ..Default::default()
         }
     }
@@ -199,7 +203,7 @@ impl<'r> From<ResponseValue<'r>> for ResponseTuple<'r> {
 impl<'r> From<(ResponseStatusCode, ResponseValue<'r>)> for ResponseTuple<'r> {
     fn from((status_code, response_value): (ResponseStatusCode, ResponseValue<'r>)) -> Self {
         ResponseTuple {
-            inner: Some(ResponseTupleInner::Value(response_value)),
+            inner: Some(ResponseTupleInner::Value(Box::new(response_value))),
             status_code,
         }
     }
@@ -480,7 +484,7 @@ impl DeriveResponseValue for DeriveToResponseValue {
 
 impl Parse for DeriveToResponseValue {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut response = DeriveToResponseValue::default();
+        let mut response = Self::default();
 
         while !input.is_empty() {
             let ident = input.parse::<Ident>()?;
@@ -557,7 +561,7 @@ impl DeriveResponseValue for DeriveToResponsesValue {
 
 impl Parse for DeriveToResponsesValue {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut response = DeriveToResponsesValue::default();
+        let mut response = Self::default();
         const MISSING_STATUS_ERROR: &str = "missing expected `status_code` attribute";
         let first_span = input.span();
 
@@ -623,12 +627,12 @@ impl Parse for DeriveToResponsesValue {
 pub(crate) struct ResponseStatusCode(TokenStream);
 
 impl Parse for ResponseStatusCode {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        fn parse_lit_int(input: ParseStream) -> syn::Result<Cow<'_, str>> {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        fn parse_lit_int(input: ParseStream<'_>) -> syn::Result<Cow<'_, str>> {
             input.parse::<LitInt>()?.base10_parse().map(Cow::Owned)
         }
 
-        fn parse_lit_str_status_range(input: ParseStream) -> syn::Result<Cow<'_, str>> {
+        fn parse_lit_str_status_range(input: ParseStream<'_>) -> syn::Result<Cow<'_, str>> {
             const VALID_STATUS_RANGES: [&str; 6] = ["default", "1XX", "2XX", "3XX", "4XX", "5XX"];
 
             input
@@ -843,7 +847,7 @@ struct Header {
 
 impl Parse for Header {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let mut header = Header {
+        let mut header = Self {
             name: input.parse::<LitStr>()?.value(),
             ..Default::default()
         };

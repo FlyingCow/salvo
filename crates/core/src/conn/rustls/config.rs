@@ -1,12 +1,13 @@
 //! rustls module
 use std::collections::HashMap;
 use std::fs::File;
-use std::future::{ready, Ready};
-use std::io::{Error as IoError, ErrorKind, Read, Result as IoResult};
+use std::future::{Ready, ready};
+use std::io::{Error as IoError, Read, Result as IoResult};
 use std::path::Path;
 use std::sync::Arc;
 
-use futures_util::stream::{once, Once, Stream};
+use futures_util::stream::{Once, Stream, once};
+use tokio_rustls::rustls::SupportedProtocolVersion;
 use tokio_rustls::rustls::crypto::ring::sign::any_supported_type;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
@@ -39,6 +40,7 @@ impl Default for Keycert {
 impl Keycert {
     /// Create a new keycert.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             key: vec![],
@@ -56,6 +58,7 @@ impl Keycert {
 
     /// Sets the Tls private key via bytes slice.
     #[inline]
+    #[must_use]
     pub fn key(mut self, key: impl Into<Vec<u8>>) -> Self {
         self.key = key.into();
         self
@@ -71,6 +74,7 @@ impl Keycert {
 
     /// Sets the Tls certificate via bytes slice
     #[inline]
+    #[must_use]
     pub fn cert(mut self, cert: impl Into<Vec<u8>>) -> Self {
         self.cert = cert.into();
         self
@@ -78,11 +82,12 @@ impl Keycert {
 
     /// Get ocsp_resp.
     #[inline]
+    #[must_use]
     pub fn ocsp_resp(&self) -> &[u8] {
         &self.ocsp_resp
     }
 
-    fn build_certified_key(&mut self) -> IoResult<CertifiedKey> {
+    fn build_certified_key(&self) -> IoResult<CertifiedKey> {
         let cert = rustls_pemfile::certs(&mut self.cert.as_ref())
             .flat_map(|certs| certs.into_iter().collect::<Vec<CertificateDer<'static>>>())
             .collect::<Vec<_>>();
@@ -90,30 +95,30 @@ impl Keycert {
         let key = {
             let mut ec = rustls_pemfile::ec_private_keys(&mut self.key.as_ref())
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| IoError::new(ErrorKind::Other, "failed to parse tls private keys"))?;
+                .map_err(|_| IoError::other("failed to parse tls private keys"))?;
             if !ec.is_empty() {
                 PrivateKeyDer::Sec1(ec.remove(0))
             } else {
                 let mut pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut self.key.as_ref())
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| IoError::new(ErrorKind::Other, "failed to parse tls private keys"))?;
+                    .map_err(|_| IoError::other("failed to parse tls private keys"))?;
                 if !pkcs8.is_empty() {
                     PrivateKeyDer::Pkcs8(pkcs8.remove(0))
                 } else {
                     let mut rsa = rustls_pemfile::rsa_private_keys(&mut self.key.as_ref())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|_| IoError::new(ErrorKind::Other, "failed to parse tls private keys"))?;
+                        .map_err(|_| IoError::other("failed to parse tls private keys"))?;
 
                     if !rsa.is_empty() {
                         PrivateKeyDer::Pkcs1(rsa.remove(0))
                     } else {
-                        return Err(IoError::new(ErrorKind::Other, "failed to parse tls private keys"));
+                        return Err(IoError::other("failed to parse tls private keys"));
                     }
                 }
             }
         };
 
-        let key = any_supported_type(&key).map_err(|_| IoError::new(ErrorKind::Other, "invalid private key"))?;
+        let key = any_supported_type(&key).map_err(|_| IoError::other("invalid private key"))?;
 
         Ok(CertifiedKey {
             cert,
@@ -138,6 +143,7 @@ pub enum TlsClientAuth {
     Required(Vec<u8>),
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn alpn_protocols() -> Vec<Vec<u8>> {
     #[allow(unused_mut)]
     let mut alpn_protocols = Vec::with_capacity(3);
@@ -161,18 +167,21 @@ pub struct RustlsConfig {
     pub client_auth: TlsClientAuth,
     /// Protocols through ALPN (Application-Layer Protocol Negotiation).
     pub alpn_protocols: Vec<Vec<u8>>,
+    /// Supported TLS versions.
+    pub tls_versions: &'static [&'static SupportedProtocolVersion],
 }
-
 
 impl RustlsConfig {
     /// Create new `RustlsConfig`
     #[inline]
+    #[must_use]
     pub fn new(fallback: impl Into<Option<Keycert>>) -> Self {
-        RustlsConfig {
+        Self {
             fallback: fallback.into(),
             keycerts: HashMap::new(),
             client_auth: TlsClientAuth::Off,
             alpn_protocols: alpn_protocols(),
+            tls_versions: tokio_rustls::rustls::ALL_VERSIONS,
         }
     }
 
@@ -192,6 +201,7 @@ impl RustlsConfig {
     ///
     /// Anonymous and authenticated clients will be accepted. If no trust anchor is provided by any
     /// of the `client_auth_` methods, then client authentication is disabled by default.
+    #[must_use]
     pub fn client_auth_optional(mut self, trust_anchor: impl Into<Vec<u8>>) -> Self {
         self.client_auth = TlsClientAuth::Optional(trust_anchor.into());
         self
@@ -214,6 +224,7 @@ impl RustlsConfig {
     /// Only authenticated clients will be accepted. If no trust anchor is provided by any of the
     /// `client_auth_` methods, then client authentication is disabled by default.
     #[inline]
+    #[must_use]
     pub fn client_auth_required(mut self, trust_anchor: impl Into<Vec<u8>>) -> Self {
         self.client_auth = TlsClientAuth::Required(trust_anchor.into());
         self
@@ -221,6 +232,7 @@ impl RustlsConfig {
 
     /// Add a new keycert to be used for the given SNI `name`.
     #[inline]
+    #[must_use]
     pub fn keycert(mut self, name: impl Into<String>, keycert: Keycert) -> Self {
         self.keycerts.insert(name.into(), keycert);
         self
@@ -228,8 +240,20 @@ impl RustlsConfig {
 
     /// Set specific protocols through ALPN (Application-Layer Protocol Negotiation).
     #[inline]
+    #[must_use]
     pub fn alpn_protocols(mut self, alpn_protocols: impl Into<Vec<Vec<u8>>>) -> Self {
         self.alpn_protocols = alpn_protocols.into();
+        self
+    }
+
+    /// Set specific TLS versions supported.
+    #[inline]
+    #[must_use]
+    pub fn tls_versions(
+        mut self,
+        tls_versions: &'static [&'static SupportedProtocolVersion],
+    ) -> Self {
+        self.tls_versions = tls_versions;
         self
     }
 
@@ -253,16 +277,16 @@ impl RustlsConfig {
                 WebPkiClientVerifier::builder(read_trust_anchor(trust_anchor)?.into())
                     .allow_unauthenticated()
                     .build()
-                    .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to build server config: {}", e)))?
+                    .map_err(|e| IoError::other(format!("failed to build server config: {e}")))?
             }
             TlsClientAuth::Required(trust_anchor) => {
                 WebPkiClientVerifier::builder(read_trust_anchor(trust_anchor)?.into())
                     .build()
-                    .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to build server config: {}", e)))?
+                    .map_err(|e| IoError::other(format!("failed to build server config: {e}")))?
             }
         };
 
-        let mut config = ServerConfig::builder()
+        let mut config = ServerConfig::builder_with_protocol_versions(self.tls_versions)
             .with_client_cert_verifier(client_auth)
             .with_cert_resolver(Arc::new(CertResolver {
                 certified_keys,
@@ -295,7 +319,7 @@ cfg_feature! {
         type Error = IoError;
 
         fn try_into(self) -> IoResult<crate::conn::quinn::ServerConfig> {
-            let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(self.build_server_config()?).map_err(|_|IoError::new(ErrorKind::Other, "failed to build quinn server config"))?;
+            let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(self.build_server_config()?).map_err(|_|IoError::other( "failed to build quinn server config"))?;
             Ok(crate::conn::quinn::ServerConfig::with_crypto(Arc::new(crypto)))
         }
     }
@@ -316,8 +340,8 @@ impl ResolvesServerCert for CertResolver {
     }
 }
 
-impl IntoConfigStream<RustlsConfig> for RustlsConfig {
-    type Stream = Once<Ready<RustlsConfig>>;
+impl IntoConfigStream<Self> for RustlsConfig {
+    type Stream = Once<Ready<Self>>;
 
     fn into_stream(self) -> Self::Stream {
         once(ready(self))

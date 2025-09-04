@@ -1,5 +1,6 @@
 use std::cmp;
 use std::error::Error as StdError;
+use std::fmt::{self, Debug, Formatter};
 use std::io::{Error as IoError, ErrorKind, IoSlice, Result as IoResult};
 use std::marker::PhantomPinned;
 use std::pin::Pin;
@@ -46,8 +47,14 @@ impl Default for HttpBuilder {
         Self::new()
     }
 }
+impl Debug for HttpBuilder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpBuilder").finish()
+    }
+}
 
 impl HttpBuilder {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             #[cfg(feature = "http1")]
@@ -101,11 +108,7 @@ impl HttpBuilder {
         match version {
             Version::HTTP_10 | Version::HTTP_11 => {
                 #[cfg(not(feature = "http1"))]
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "http1 feature not enabled",
-                )
-                .into());
+                return Err(std::io::Error::other("http1 feature not enabled").into());
                 #[cfg(feature = "http1")]
                 {
                     let mut conn = self
@@ -166,11 +169,7 @@ impl HttpBuilder {
             }
             Version::HTTP_2 => {
                 #[cfg(not(feature = "http2"))]
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "http2 feature not enabled",
-                )
-                .into());
+                return Err(std::io::Error::other("http2 feature not enabled").into());
                 #[cfg(feature = "http2")]
                 {
                     let mut conn = self.http2.serve_connection(TokioIo::new(socket), service);
@@ -301,7 +300,7 @@ pub(crate) struct Rewind<T> {
 #[allow(dead_code)]
 impl<T> Rewind<T> {
     fn new_buffered(buf: Bytes, io: T) -> Self {
-        Rewind {
+        Self {
             pre: Some(buf),
             inner: io,
         }

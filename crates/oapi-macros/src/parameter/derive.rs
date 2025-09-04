@@ -134,7 +134,7 @@ impl TryToTokens for ToParameters {
             };
         let default_source = quote! { #salvo::extract::metadata::Source::new(#default_source_from, #salvo::extract::metadata::SourceParser::MultiMap) };
         let params = self
-            .get_struct_fields(&names.as_ref())?
+            .get_struct_fields(names.as_ref())?
             .enumerate()
             .filter_map(|(index, field)| {
                 let field_serde_params = serde_util::parse_value(&field.attrs);
@@ -151,7 +151,7 @@ impl TryToTokens for ToParameters {
                     container_attributes: FieldParameterContainerAttributes {
                         rename_all: rename_all.as_ref().and_then(|feature| {
                             match feature {
-                                Feature::RenameAll(rename_all) => Some(rename_all),
+                                Feature::RenameAll(rename_all) => Some(*rename_all),
                                 _ => None
                             }
                         }),
@@ -160,7 +160,7 @@ impl TryToTokens for ToParameters {
                         name: names.as_ref().map(|names| names.get(index).ok_or_else(||  Diagnostic::spanned(
                             ident.span(),
                             DiagLevel::Error,
-                            format!("There is no name specified in the names(...) container attribute for tuple struct field {}", index)
+                            format!("There is no name specified in the names(...) container attribute for tuple struct field {index}")
                         ))).transpose()?,
                     },
                     serde_container: serde_container.as_ref(),
@@ -182,7 +182,7 @@ impl TryToTokens for ToParameters {
             vec![]
         };
 
-        fn quote_rename_rule(salvo: &Ident, rename_all: &RenameRule) -> TokenStream {
+        fn quote_rename_rule(salvo: &Ident, rename_all: RenameRule) -> TokenStream {
             let rename_all = match rename_all {
                 RenameRule::LowerCase => "LowerCase",
                 RenameRule::UpperCase => "UpperCase",
@@ -202,7 +202,7 @@ impl TryToTokens for ToParameters {
             .as_ref()
             .map(|feature| match feature {
                 Feature::RenameAll(RenameAll(rename_rule)) => {
-                    let rule = quote_rename_rule(&salvo, rename_rule);
+                    let rule = quote_rename_rule(&salvo, *rename_rule);
                     Some(quote! {
                         .rename_all(#rule)
                     })
@@ -214,7 +214,7 @@ impl TryToTokens for ToParameters {
             .as_ref()
             .and_then(|container| container.rename_all)
         {
-            let rule = quote_rename_rule(&salvo, &serde_rename_all);
+            let rule = quote_rename_rule(&salvo, serde_rename_all);
             Some(quote! {
                 .serde_rename_all(#rule)
             })
@@ -241,7 +241,7 @@ impl TryToTokens for ToParameters {
                 }
             }
             impl #ex_impl_generics #salvo::Extractible<'__macro_gen_ex> for #ident #ty_generics #where_clause {
-                fn metadata() -> &'__macro_gen_ex #salvo::extract::Metadata {
+                fn metadata() -> &'static #salvo::extract::Metadata {
                     static METADATA: ::std::sync::OnceLock<#salvo::extract::Metadata> = ::std::sync::OnceLock::new();
                     METADATA.get_or_init(||
                         #salvo::extract::Metadata::new(#name)
@@ -269,13 +269,12 @@ impl ToParameters {
     }
     fn get_struct_fields(
         &self,
-        field_names: &Option<&Vec<String>>,
+        field_names: Option<&Vec<String>>,
     ) -> DiagResult<impl Iterator<Item = &Field>> {
         let ident = &self.ident;
         let abort = |note: &str| {
             let msg = format!(
-                "unsupported data type, expected struct with named fields `struct {} {{...}}` or unnamed fields `struct {}(...)`",
-                ident, ident
+                "unsupported data type, expected struct with named fields `struct {ident} {{...}}` or unnamed fields `struct {ident}(...)`"
             );
             Err(Diagnostic::spanned(ident.span(), DiagLevel::Error, msg).note(note))
         };
@@ -305,7 +304,7 @@ impl ToParameters {
     fn validate_unnamed_field_names(
         &self,
         unnamed_fields: &Punctuated<Field, Token![,]>,
-        field_names: &Option<&Vec<String>>,
+        field_names: Option<&Vec<String>>,
     ) -> DiagResult<()> {
         let ident = &self.ident;
         match field_names {
@@ -335,8 +334,7 @@ impl ToParameters {
                 "struct with unnamed fields must have explicit name declarations.",
             )
             .help(format!(
-                "Try defining `#[salvo(parameters(names(...)))]` over your type: {}",
-                ident
+                "Try defining `#[salvo(parameters(names(...)))]` over your type: {ident}"
             ))),
         }
     }
@@ -351,7 +349,7 @@ pub(crate) struct FieldParameterContainerAttributes<'a> {
     /// See [`ToParametersAttr::parameter_in`].
     default_parameter_in: &'a Option<Feature>,
     /// Custom rename all if serde attribute is not present.
-    rename_all: Option<&'a RenameAll>,
+    rename_all: Option<RenameAll>,
 }
 
 struct FieldFeatures(Vec<Feature>);
@@ -555,11 +553,11 @@ impl TryToTokens for Parameter<'_> {
         let rename_all = self
             .container_attributes
             .rename_all
-            .map(|rename_all| rename_all.as_rename_rule())
+            .map(|rename_all| rename_all.to_rename_rule())
             .or_else(|| {
                 self.serde_container
                     .as_ref()
-                    .and_then(|serde_container| serde_container.rename_all.as_ref())
+                    .and_then(|serde_container| serde_container.rename_all)
             });
         let name =
             crate::rename::<FieldRename>(name, rename, rename_all).unwrap_or(Cow::Borrowed(name));
