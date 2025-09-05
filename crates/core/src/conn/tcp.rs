@@ -84,14 +84,15 @@ impl<T: ToSocketAddrs + Send + 'static> TcpListener<T> {
             RustlsListener::new(config_stream, self)
         }
 
+
         /// Creates a new `RustlsListener` from current `TcpListener`.
         #[inline]
-        pub fn rustls_async<S, E>(self, config: S) -> super::RustlsAsyncListener<S,Self,E>
+        pub fn rustls_async<R, E>(self, config_resolver: R) -> super::RustlsAsyncListener<R, Self, E>
         where
-            S: super::rustls_async::ResolvesServerConfig<E> + Send + 'static,
-            E: std::error::Error + Send
+            R: super::rustls_async::ResolvesServerConfig<E> + Send + 'static,
+            E: std::error::Error + Send + 'static
         {
-            super::RustlsAsyncListener::new(config, self)
+            super::RustlsAsyncListener::new(config_resolver, self)
         }
     }
 

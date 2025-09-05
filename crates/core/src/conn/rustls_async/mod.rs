@@ -7,7 +7,7 @@ pub(crate) mod config;
 pub use config::{Keycert, ResolvesServerConfig, RustlsConfig, ServerConfig};
 
 mod listener;
-pub use listener::{RustlsAcceptor, RustlsListener};
+pub use listener::{RustlsAcceptor, RustlsAsyncListener};
 
 pub(crate) fn read_trust_anchor(mut trust_anchor: &[u8]) -> IoResult<RootCertStore> {
     let certs = rustls_pemfile::certs(&mut trust_anchor).collect::<IoResult<Vec<_>>>()?;
@@ -24,23 +24,22 @@ pub(crate) fn read_trust_anchor(mut trust_anchor: &[u8]) -> IoResult<RootCertSto
 mod tests {
     use std::sync::Arc;
 
-    use tokio_rustls::rustls::server::ClientHello;
+    use ResolvesServerConfig;
     use std::io::Error as IoError;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
-    use tokio_rustls::rustls::{pki_types::ServerName, ClientConfig};
     use tokio_rustls::TlsConnector;
-    use ResolvesServerConfig;
+    use tokio_rustls::rustls::server::ClientHello;
+    use tokio_rustls::rustls::{ClientConfig, pki_types::ServerName};
 
     use super::*;
-    use crate::conn::{Accepted, Acceptor, TcpListener};
     use crate::Listener;
+    use crate::conn::{Accepted, Acceptor, TcpListener};
 
     struct ServerConfigResolverMock {}
 
     #[async_trait::async_trait]
-    impl ResolvesServerConfig<IoError> for ServerConfigResolverMock
-    {
+    impl ResolvesServerConfig<IoError> for ServerConfigResolverMock {
         async fn resolve(&self, _hello: ClientHello<'_>) -> Result<Arc<RustlsConfig>, IoError> {
             let config = RustlsConfig::new(
                 Keycert::new()
@@ -53,18 +52,21 @@ mod tests {
             Ok(Arc::new(config))
         }
     }
-    
+
     #[tokio::test]
     async fn test_rustls_listener() {
-
-        let config_resolver = ServerConfigResolverMock{};
+        let config_resolver = ServerConfigResolverMock {};
 
         let mut acceptor = TcpListener::new("127.0.0.1:0")
             .rustls_async(config_resolver)
             .bind()
             .await;
 
-        let addr = acceptor.holdings()[0].local_addr.clone().into_std().unwrap();
+        let addr = acceptor.holdings()[0]
+            .local_addr
+            .clone()
+            .into_std()
+            .unwrap();
 
         tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
@@ -80,7 +82,7 @@ mod tests {
             tls_stream.write_i32(518).await.unwrap();
         });
 
-        let Accepted { mut conn, .. } = acceptor.accept(None).await.unwrap();
-        assert_eq!(conn.read_i32().await.unwrap(), 518);
+        let Accepted { mut stream, .. } = acceptor.accept(None).await.unwrap();
+        assert_eq!(stream.read_i32().await.unwrap(), 518);
     }
 }
